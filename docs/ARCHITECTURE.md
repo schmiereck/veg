@@ -1,4 +1,4 @@
-# Architektur — Stand Stufe 0 bis Stufe 3
+# Architektur — Stand Stufe 0 bis Stufe 4
 
 ## 1. Schichtenmodell & Modulabhängigkeiten
 
@@ -24,8 +24,11 @@ flowchart LR
   - `GraphSchemaValidator` (Skalar-, Domain/Range-, Kardinalitäts- und Schema-Eindeutigkeitsprüfungen inkl. Bestandsprüfung bei `T06`)
   - `InMemoryGraphEngine` (schlanke `GraphSession`-Fassade, 221 Zeilen)
   - `InMemoryTransaction` (isolierter Workspace mit mehrstufigem Savepoint-Stack)
-  - `GraphDiffCalculator` & `InMemoryVersionedDatabase` (`Commit`-Log, `asOf`, `diff`, `revert`, `replayAsOf`)
-- **`veg-test-fixtures`:** Backend-unabhängige Contract-Suiten (`Stage1ContractTestSuite`, `Stage2ContractTestSuite`, `Stage3ContractTestSuite`) und deterministischer Generator (`DeterministicGraphGenerator`), sodass künftige Engines (B/C) exakt dieselben Korrektheitstests erfüllen müssen (`P-01`).
+  - `InMemoryStagingWorkspace` (gruppiertes selektives Staging mit Abhängigkeitsprüfung `V-06`)
+  - `CommitReverter` (Gegen-Commit-Revert-Logik mit Konfliktprüfung)
+  - `ThreeWayMergeEngine` (LCA-Suche im Commit-DAG, `DataCategory`-Filterung und 6 Konfliktklassen)
+  - `GraphDiffCalculator` & `InMemoryVersionedDatabase` (Commit-DAG, Branches, Tags, `asOf`, `diff`, `revert`, `merge`, `replayAsOf`)
+- **`veg-test-fixtures`:** Backend-unabhängige Contract-Suiten (`Stage1ContractTestSuite`–`Stage4ContractTestSuite`) und deterministischer Generator (`DeterministicGraphGenerator`), sodass künftige Engines (B/C) exakt dieselben Korrektheitstests erfüllen müssen (`P-01`).
 
 ---
 

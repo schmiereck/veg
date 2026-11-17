@@ -15,4 +15,8 @@ public final class InMemoryGraphSnapshot extends AbstractGraphReader {
     protected MutableGraphState state() {
         return frozenState;
     }
+
+    MutableGraphState copyState() {
+        return frozenState.copy();
+    }
 }

@@ -5,6 +5,7 @@ import io.veg.engine.TransactionStateException;
 import io.veg.model.Actor;
 import io.veg.model.Change;
 import io.veg.model.CommitId;
+import io.veg.model.DataCategory;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
@@ -21,7 +22,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Isolated read/write transaction workspace with multi-level savepoints (V-03, V-11).
+ * Isolated branch-scoped read/write transaction workspace with multi-level savepoints (V-03, V-11).
  */
 final class InMemoryTransaction implements GraphTransaction {
 
@@ -29,7 +30,9 @@ final class InMemoryTransaction implements GraphTransaction {
     }
 
     private final InMemoryVersionedDatabase database;
+    private final String branchName;
     private final CommitId baseCommitId;
+    private final DataCategory dataCategory;
     private final Actor actor;
     private final Reason reason;
     private final Optional<String> correlationId;
@@ -43,14 +46,18 @@ final class InMemoryTransaction implements GraphTransaction {
 
     InMemoryTransaction(
             InMemoryVersionedDatabase database,
+            String branchName,
             CommitId baseCommitId,
             MutableGraphState baseStateCopy,
+            DataCategory dataCategory,
             Actor actor,
             Reason reason,
             String correlationId
     ) {
         this.database = database;
+        this.branchName = branchName;
         this.baseCommitId = baseCommitId;
+        this.dataCategory = dataCategory;
         this.actor = actor;
         this.reason = reason;
         this.correlationId = Optional.ofNullable(correlationId);
@@ -116,7 +123,8 @@ final class InMemoryTransaction implements GraphTransaction {
         ensureOpen();
         open = false;
         savepoints.clear();
-        return database.publishTransactionCommit(baseCommitId, actor, reason, correlationId, delegate.state(), pendingChanges);
+        return database.publishBranchCommit(
+                branchName, baseCommitId, dataCategory, actor, reason, correlationId, delegate.state(), pendingChanges);
     }
 
     @Override
@@ -139,8 +147,6 @@ final class InMemoryTransaction implements GraphTransaction {
             throw new TransactionStateException("Transaction is already closed");
         }
     }
-
-    // --- GraphSession & GraphReader delegations ---
 
     @Override public EntityId defineObjectType(String name) { ensureOpen(); return delegate.defineObjectType(name); }
     @Override public EntityId defineValueType(String name, ValueType scalarType, boolean uniqueValues) {

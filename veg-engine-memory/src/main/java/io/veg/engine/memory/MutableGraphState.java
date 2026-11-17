@@ -17,10 +17,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Isolated mutable graph state backing {@link InMemoryGraphEngine}, {@link InMemoryGraphSnapshot},
- * savepoints, and deterministic commit replay.
+ * savepoints, staging workspaces, and deterministic commit replay.
  */
 final class MutableGraphState {
 
@@ -33,10 +34,14 @@ final class MutableGraphState {
     final Map<String, EntityId> predicateByName;
     final Map<EntityId, Map<Value, EntityId>> uniqueValuesByType;
 
-    long nextUserEntityId;
+    final AtomicLong userEntityIdAllocator;
     long nextBootstrapAuxId;
 
     MutableGraphState() {
+        this(new AtomicLong(EntityId.USER_MIN_ID));
+    }
+
+    MutableGraphState(AtomicLong sharedUserEntityIdAllocator) {
         this.entities = new HashMap<>();
         this.edges = new HashMap<>();
         this.outgoingEdges = new HashMap<>();
@@ -44,7 +49,7 @@ final class MutableGraphState {
         this.typeByName = new HashMap<>();
         this.predicateByName = new HashMap<>();
         this.uniqueValuesByType = new HashMap<>();
-        this.nextUserEntityId = EntityId.USER_MIN_ID;
+        this.userEntityIdAllocator = sharedUserEntityIdAllocator;
         this.nextBootstrapAuxId = 100L;
     }
 
@@ -59,7 +64,7 @@ final class MutableGraphState {
         for (var entry : source.uniqueValuesByType.entrySet()) {
             this.uniqueValuesByType.put(entry.getKey(), new HashMap<>(entry.getValue()));
         }
-        this.nextUserEntityId = source.nextUserEntityId;
+        this.userEntityIdAllocator = source.userEntityIdAllocator;
         this.nextBootstrapAuxId = source.nextBootstrapAuxId;
     }
 
@@ -76,7 +81,7 @@ final class MutableGraphState {
     }
 
     EntityId allocateUserId() {
-        return new EntityId(nextUserEntityId++);
+        return new EntityId(userEntityIdAllocator.getAndIncrement());
     }
 
     void putEntity(EntityNode node) {
@@ -166,7 +171,8 @@ final class MutableGraphState {
             }
         }
 
-        this.nextUserEntityId = maxUser + 1;
+        long minNextUser = maxUser + 1;
+        this.userEntityIdAllocator.updateAndGet(cur -> Math.max(cur, minNextUser));
         this.nextBootstrapAuxId = maxBootstrapAux + 1;
     }
 

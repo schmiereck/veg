@@ -150,3 +150,47 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 4):**  
   Übergang vom linearen Commit-Log auf einen Branch-/Tag-DAG mit strukturell geteilten Zuständen (`T16`), selektivem Staging mit Abhängigkeitsprüfung (`V-06`) sowie Drei-Wege-Diff/Merge inklusive Konflikterkennung für Daten, gemeinsam genutzte Wertobjekte (`T11`) und Schemaänderungen (`T10`, `T12`).
+
+---
+
+## Eintrag 04 — Stufe 4: Branches, selektives Staging & struktureller Drei-Wege-Merge
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 4** / **Hypothesen H4 & H5**:  
+  1. Ein Branch-Zeiger-Modell auf unveränderlichen Snapshots samt globalem kollisionsfreiem `EntityId`-Allokator erlaubt hunderte Branches ohne Objektkopien (`T16`) und konfliktfreie Merges unabhängiger Schema-/Datenänderungen (`T10`).  
+  2. Gruppiertes selektives Staging verhindert das versehentliche Committen von Kanten oder Objekten ohne ihre erforderlichen Endpunkte oder Typdefinitionen (`V-06`).  
+  3. Struktureller Drei-Wege-Merge mit `DataCategory`-Filterung schützt Entwicklungsmerges vor operativen Betriebsdaten (`V-13`) und meldet geteilte Wertkonflikte (`T11`) sowie Schema-vs.-Daten-Konflikte (`T12`) explizit statt per Last-Writer-Wins.
+
+- **Implementiert:**  
+  - `veg-model`: `Commit` (erweitert um `parentIds`, `branchName`, `dataCategory` bei voller Rückwärtskompatibilität), `DataCategory`, `Branch`, `Tag`, `MergePolicy`, `MergeConflictType`, `MergeConflict`, `MergeResult`.
+  - `veg-engine-api`: `StagingWorkspace`, erweiterte `VersionedGraphDatabase` (`createBranch`, `checkoutBranch`, `createTag`, `asOfTag`, `createStagingWorkspace`, `findCommonAncestor`, `merge`, `resolveMerge`), Exceptions (`BranchNotFoundException`, `DuplicateBranchOrTagException`, `MissingDependencyException`, `MergeConflictException`).
+  - `veg-engine-memory`: `InMemoryStagingWorkspace`, `ThreeWayMergeEngine`, `CommitReverter`, gemeinsamer `AtomicLong`-Allokator in `MutableGraphState` sowie DAG-fähiges `InMemoryVersionedDatabase` (inkl. First-Parent-Replay über Merge-Commits).
+  - `veg-test-fixtures` & Tests: `Stage4ContractTestSuite` (22 Testmethoden für `V-05`–`V-08`, `V-12`–`V-13`, `T10`–`T12`, `T16`), `BranchMergeProperties` (`jqwik`, `tries = 25`), `BranchAndMergeModelTest`.
+  - `veg-cli`: Erweiterung von `demo` um Stufe-4-Branching, selektives Staging, `OPERATIONAL`-Datenfilterung und 3-Wege-Merge.
+  - Dokumentation: [ADR-0005](adr/0005-branching-selective-staging-and-three-way-merge.md), Erweiterung von [INVARIANTS.md](INVARIANTS.md) (`I-14`–`I-16`), [ARCHITECTURE.md](ARCHITECTURE.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **78 / 78 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 13 / 13 bestanden (`BranchAndMergeModelTest` 3, `ModelPrimitivesTest` 6, `VersionedModelPrimitivesTest` 4)
+  - `veg-engine-memory`: 60 / 60 bestanden (`InMemoryStage1ContractTest` 6, `InMemoryStage2ContractTest` 5, `InMemoryStage3ContractTest` 23, `InMemoryStage4ContractTest` 22, `BranchMergeProperties` 1 × `tries = 25`, `GraphInvariantsProperties` 2 × `tries = 40`, `VersionedDatabaseProperties` 1 × `tries = 30`)
+  - `veg-benchmarks`: 2 / 2 bestanden
+  - `veg-cli`: 3 / 3 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  - `T16`: 500 Branches auf einem mit `DeterministicGraphGenerator` (500 Personen) gefüllten Graphen teilen ohne jede Datenkopie dieselbe `InMemoryGraphSnapshot`-Instanz.
+  - `BranchMergeProperties` (`tries = 25`): Kommutativität unabhängiger Branch-Merges (`merge(A -> main); merge(B -> main)` == `merge(B -> main); merge(A -> main)`) sowie identischer `replayAsOf(mergeCommitId)`.
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt (`V-06` / `V-13` / `T10`–`T12`):** Selektives Staging mit `MissingDependencyException`, die Trennung von `REFERENCE`/`SCHEMA` vs. `OPERATIONAL`/`TEST` im Merge sowie alle 6 Konfliktklassen arbeiten deterministisch zusammen.
+  - **Wichtiges Architektur-Detail:** Beim Replay auf einem Commit-DAG darf `replayAsOf(c)` für Merge-Commits nur der First-Parent-Linie folgen, weil der Merge-Commit selbst bereits das effektive Delta auf den Ziel-Branch enthält.
+
+- **Risiken und technische Schulden:**  
+  1. Pro Commit hält Engine A in `snapshots` weiterhin eine eigene `MutableGraphState`-Kopie — echte Sub-Graph-Teilung zwischen Commits folgt in Stufe 7 (Engine C).
+  2. Berechtigungen (Entity/Relation/Attribut) und semantische Ableitungen fehlen noch.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** mit Stufe 5 (Berechtigungen und semantische Regeln).
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 5):**  
+  Versions- und branchbewusste Zugriffskontrolle auf Entity-, Relations- und Attributebene (`S-01`–`S-03`, `S-05`), deklarative Rechtevererbung entlang explizit freigegebener Relationstypen mit Default-Deny und Zyklusschutz (`T13`, `T14`) sowie minimale abgeleitete Aussagen (`inverse` / `subPropertyOf`, klar getrennt von expliziten Aussagen, `M-12`).

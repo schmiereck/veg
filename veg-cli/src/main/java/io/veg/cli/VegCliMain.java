@@ -11,6 +11,7 @@ import io.veg.benchmarks.BaselineBenchmarkRunner.IterationResult;
 import io.veg.engine.GraphReader;
 import io.veg.engine.GraphSession;
 import io.veg.engine.GraphTransaction;
+import io.veg.engine.StagingWorkspace;
 import io.veg.engine.TypeMismatchException;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
@@ -18,9 +19,12 @@ import io.veg.engine.memory.InMemoryVersionedDatabase;
 import io.veg.model.Actor;
 import io.veg.model.BootstrapIds;
 import io.veg.model.CommitId;
+import io.veg.model.DataCategory;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
+import io.veg.model.MergePolicy;
+import io.veg.model.MergeResult;
 import io.veg.model.Reason;
 import io.veg.model.SavepointId;
 import io.veg.model.Value;
@@ -155,6 +159,44 @@ public final class VegCliMain {
         out.println("diff(" + c1 + ", " + c2 + "): updatedValues=" + diff.updatedValues().size());
         out.println("After revert(" + c2 + ") at " + c3 + ": diff(" + c1 + ", " + c3 + ").isEmpty()=" + db.diff(c1, c3).isEmpty()
                 + ", replay matches live=" + replayed.allEntities().equals(db.currentSnapshot().allEntities()));
+
+        runStage4Demo(out);
+    }
+
+    private static void runStage4Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 4 Branches, Selective Staging & 3-Way Merge Demo ===");
+        VersionedGraphDatabase db = new InMemoryVersionedDatabase();
+        EntityId customerType;
+        CommitId base;
+        try (GraphTransaction tx = db.beginTransaction(Actor.user("u1"), Reason.of("Base"))) {
+            customerType = tx.defineObjectType("Customer");
+            base = tx.commit();
+        }
+
+        db.createBranch("feature/crm", base);
+        StagingWorkspace ws = db.createStagingWorkspace("feature/crm");
+        EntityId regionType = ws.defineObjectType("Region");
+        EntityId euWest = ws.createObject(regionType);
+        EntityId unstagedDraft = ws.createObject(customerType);
+        ws.stageEntity(regionType);
+        ws.stageEntity(euWest);
+        ws.commitStaged(Actor.user("dev"), Reason.of("Stage schema & reference Region only"));
+
+        EntityId opCustomer;
+        try (GraphTransaction tx = db.beginTransaction(
+                "feature/crm", Actor.user("svc"), Reason.of("Operational signup"), null, DataCategory.OPERATIONAL)) {
+            opCustomer = tx.createObject(customerType);
+            tx.commit();
+        }
+
+        MergeResult merged = db.merge("feature/crm", "main",
+                Actor.user("release"), Reason.of("Promote feature/crm"), MergePolicy.developmentDefault());
+        GraphReader mainSnap = db.branchSnapshot("main");
+        out.println("Merge succeeded=" + merged.succeeded()
+                + ", main has Region=" + mainSnap.findTypeByName("Region").isPresent()
+                + ", excluded operational customer=" + mainSnap.findEntity(opCustomer).isEmpty()
+                + ", unstaged draft kept separate=" + mainSnap.findEntity(unstagedDraft).isEmpty());
     }
 
     private static int runBenchmark(String[] args, PrintStream out, PrintStream err) throws IOException {

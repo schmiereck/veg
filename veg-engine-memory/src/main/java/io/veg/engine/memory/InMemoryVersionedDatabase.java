@@ -1,53 +1,64 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.BranchNotFoundException;
 import io.veg.engine.CommitNotFoundException;
+import io.veg.engine.DuplicateBranchOrTagException;
 import io.veg.engine.GraphReader;
+import io.veg.engine.GraphSession;
 import io.veg.engine.GraphTransaction;
 import io.veg.engine.RevertConflictException;
-import io.veg.engine.SchemaViolationException;
+import io.veg.engine.StagingWorkspace;
 import io.veg.engine.TransactionStateException;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.model.Actor;
-import io.veg.model.BootstrapIds;
+import io.veg.model.Branch;
 import io.veg.model.Change;
 import io.veg.model.Commit;
 import io.veg.model.CommitId;
-import io.veg.model.Edge;
+import io.veg.model.DataCategory;
 import io.veg.model.EntityId;
-import io.veg.model.EntityKind;
-import io.veg.model.EntityNode;
 import io.veg.model.GraphDiff;
+import io.veg.model.MergePolicy;
+import io.veg.model.MergeResult;
 import io.veg.model.Reason;
-import io.veg.model.Value;
+import io.veg.model.Tag;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
- * Linear append-only versioned in-memory database implementing atomic transactions,
- * historical snapshots ({@code asOf}), structural diffs, counter-commit reverts, and full replay (Stage 3).
+ * Commit-DAG versioned in-memory database supporting branches, tags, selective staging,
+ * structural three-way merge, transactions, savepoints, diffs, reverts, and replay (Stages 3–4).
  */
 public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
 
+    private final AtomicLong sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
     private final List<Commit> commits = new ArrayList<>();
     private final Map<CommitId, InMemoryGraphSnapshot> snapshots = new HashMap<>();
+    private final Map<String, Branch> branches = new LinkedHashMap<>();
+    private final Map<String, Tag> tags = new LinkedHashMap<>();
 
-    private CommitId headCommitId;
-    private MutableGraphState headState;
+    private String activeBranch = DEFAULT_BRANCH;
 
     public InMemoryVersionedDatabase() {
-        MutableGraphState initialState = new MutableGraphState();
+        MutableGraphState initialState = new MutableGraphState(sharedUserEntityIdAllocator);
         List<Change> bootstrapChanges = new ArrayList<>();
         BootstrapKernelInitializer.initialize(initialState, bootstrapChanges);
 
         Commit bootstrapCommit = new Commit(
                 CommitId.BOOTSTRAP,
-                Optional.empty(),
+                List.of(),
+                DEFAULT_BRANCH,
+                DataCategory.SCHEMA,
                 Actor.system(),
                 Reason.of("Bootstrap kernel initialization"),
                 Optional.empty(),
@@ -56,18 +67,100 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
         );
         commits.add(bootstrapCommit);
         snapshots.put(CommitId.BOOTSTRAP, new InMemoryGraphSnapshot(initialState.copy()));
-        this.headCommitId = CommitId.BOOTSTRAP;
-        this.headState = initialState;
+        branches.put(DEFAULT_BRANCH, new Branch(DEFAULT_BRANCH, CommitId.BOOTSTRAP));
+    }
+
+    @Override
+    public String currentBranch() {
+        return activeBranch;
+    }
+
+    @Override
+    public void checkoutBranch(String branchName) {
+        requireBranch(branchName);
+        this.activeBranch = branchName;
     }
 
     @Override
     public CommitId headCommitId() {
-        return headCommitId;
+        return branchHead(activeBranch);
     }
 
     @Override
     public GraphReader currentSnapshot() {
-        return snapshots.get(headCommitId);
+        return snapshots.get(headCommitId());
+    }
+
+    @Override
+    public Branch createBranch(String branchName, CommitId fromCommitId) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        Objects.requireNonNull(fromCommitId, "fromCommitId must not be null");
+        if (branchName.isBlank()) {
+            throw new IllegalArgumentException("branchName must not be blank");
+        }
+        if (branches.containsKey(branchName)) {
+            throw new DuplicateBranchOrTagException("Branch already exists: " + branchName);
+        }
+        getCommit(fromCommitId);
+        Branch branch = new Branch(branchName, fromCommitId);
+        branches.put(branchName, branch);
+        return branch;
+    }
+
+    @Override
+    public Optional<Branch> findBranch(String branchName) {
+        return branchName == null ? Optional.empty() : Optional.ofNullable(branches.get(branchName));
+    }
+
+    @Override
+    public List<Branch> listBranches() {
+        return List.copyOf(branches.values());
+    }
+
+    @Override
+    public CommitId branchHead(String branchName) {
+        return requireBranch(branchName).headCommitId();
+    }
+
+    @Override
+    public GraphReader branchSnapshot(String branchName) {
+        return snapshots.get(branchHead(branchName));
+    }
+
+    @Override
+    public Tag createTag(String tagName, CommitId commitId) {
+        Objects.requireNonNull(tagName, "tagName must not be null");
+        Objects.requireNonNull(commitId, "commitId must not be null");
+        if (tagName.isBlank()) {
+            throw new IllegalArgumentException("tagName must not be blank");
+        }
+        if (tags.containsKey(tagName)) {
+            throw new DuplicateBranchOrTagException("Tag already exists: " + tagName);
+        }
+        getCommit(commitId);
+        Tag tag = new Tag(tagName, commitId);
+        tags.put(tagName, tag);
+        return tag;
+    }
+
+    @Override
+    public Optional<Tag> findTag(String tagName) {
+        return tagName == null ? Optional.empty() : Optional.ofNullable(tags.get(tagName));
+    }
+
+    @Override
+    public List<Tag> listTags() {
+        return List.copyOf(tags.values());
+    }
+
+    @Override
+    public GraphReader asOfTag(String tagName) {
+        Objects.requireNonNull(tagName, "tagName must not be null");
+        Tag tag = tags.get(tagName);
+        if (tag == null) {
+            throw new CommitNotFoundException("Tag not found: " + tagName);
+        }
+        return asOf(tag.commitId());
     }
 
     @Override
@@ -115,44 +208,141 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
     }
 
     @Override
-    public GraphTransaction beginTransaction(Actor actor, Reason reason, String correlationId) {
+    public GraphTransaction beginTransaction(
+            String branchName,
+            Actor actor,
+            Reason reason,
+            String correlationId,
+            DataCategory dataCategory
+    ) {
         Objects.requireNonNull(actor, "actor must not be null");
         Objects.requireNonNull(reason, "reason must not be null");
-        return new InMemoryTransaction(this, headCommitId, headState.copy(), actor, reason, correlationId);
+        Objects.requireNonNull(dataCategory, "dataCategory must not be null");
+        CommitId head = branchHead(branchName);
+        return new InMemoryTransaction(
+                this, branchName, head, snapshots.get(head).copyState(), dataCategory, actor, reason, correlationId);
     }
 
     @Override
-    public CommitId revert(CommitId targetCommitId, Actor actor, Reason reason, String correlationId) {
+    public StagingWorkspace createStagingWorkspace(String branchName) {
+        CommitId head = branchHead(branchName);
+        return new InMemoryStagingWorkspace(this, branchName, head, snapshots.get(head).copyState());
+    }
+
+    @Override
+    public CommitId revert(String branchName, CommitId targetCommitId, Actor actor, Reason reason, String correlationId) {
         Objects.requireNonNull(targetCommitId, "targetCommitId must not be null");
         Objects.requireNonNull(actor, "actor must not be null");
         Objects.requireNonNull(reason, "reason must not be null");
 
+        CommitId branchHeadId = branchHead(branchName);
         if (targetCommitId.isBootstrap()) {
             throw new RevertConflictException("Cannot revert bootstrap commit " + targetCommitId);
         }
         Commit target = getCommit(targetCommitId);
+        MutableGraphState working = snapshots.get(branchHeadId).copyState();
+        List<Change> counterChanges = CommitReverter.revertOnto(working, target);
 
-        MutableGraphState working = headState.copy();
-        List<Change> counterChanges = new ArrayList<>(target.changes().size());
+        return appendCommit(
+                branchName,
+                List.of(branchHeadId),
+                DataCategory.REFERENCE,
+                actor,
+                reason,
+                Optional.ofNullable(correlationId),
+                working,
+                counterChanges
+        );
+    }
 
-        List<Change> targetChanges = target.changes();
-        for (int i = targetChanges.size() - 1; i >= 0; i--) {
-            Change change = targetChanges.get(i);
-            applyInverseChange(working, change, counterChanges);
+    @Override
+    public CommitId findCommonAncestor(CommitId commitA, CommitId commitB) {
+        getCommit(commitA);
+        getCommit(commitB);
+        return ThreeWayMergeEngine.findCommonAncestor(commits, commitA, commitB);
+    }
+
+    @Override
+    public MergeResult merge(String sourceBranch, String targetBranch, Actor actor, Reason reason, MergePolicy policy) {
+        Objects.requireNonNull(actor, "actor must not be null");
+        Objects.requireNonNull(reason, "reason must not be null");
+        Objects.requireNonNull(policy, "policy must not be null");
+
+        CommitId sourceHead = branchHead(sourceBranch);
+        CommitId targetHead = branchHead(targetBranch);
+
+        ThreeWayMergeEngine.PreparedMerge prepared =
+                ThreeWayMergeEngine.prepareMerge(commits, snapshots, sourceHead, targetHead, policy);
+        if (!prepared.succeeded()) {
+            return new MergeResult(
+                    false, Optional.empty(), prepared.baseCommitId(), sourceHead, targetHead, prepared.conflicts());
         }
-        working.rebuildDerivedIndexes();
 
-        return appendCommit(actor, reason, Optional.ofNullable(correlationId), working, counterChanges);
+        List<CommitId> parents = sourceHead.equals(targetHead)
+                ? List.of(targetHead)
+                : List.of(targetHead, sourceHead);
+        CommitId mergeCommitId = appendCommit(
+                targetBranch,
+                parents,
+                DataCategory.REFERENCE,
+                actor,
+                reason,
+                Optional.empty(),
+                prepared.mergedState(),
+                prepared.changesFromTarget()
+        );
+        return new MergeResult(
+                true, Optional.of(mergeCommitId), prepared.baseCommitId(), sourceHead, targetHead, List.of());
+    }
+
+    @Override
+    public CommitId resolveMerge(
+            String sourceBranch,
+            String targetBranch,
+            Actor actor,
+            Reason reason,
+            Consumer<GraphSession> conflictResolver
+    ) {
+        Objects.requireNonNull(actor, "actor must not be null");
+        Objects.requireNonNull(reason, "reason must not be null");
+        Objects.requireNonNull(conflictResolver, "conflictResolver must not be null");
+
+        CommitId sourceHead = branchHead(sourceBranch);
+        CommitId targetHead = branchHead(targetBranch);
+
+        MutableGraphState resolvedState = snapshots.get(targetHead).copyState();
+        List<Change> resolutionChanges = new ArrayList<>();
+        InMemoryGraphEngine session = new InMemoryGraphEngine(resolvedState, resolutionChanges);
+        conflictResolver.accept(session);
+
+        return appendCommit(
+                targetBranch,
+                List.of(targetHead, sourceHead),
+                DataCategory.REFERENCE,
+                actor,
+                reason,
+                Optional.empty(),
+                resolvedState,
+                resolutionChanges
+        );
     }
 
     @Override
     public GraphReader replayAsOf(CommitId commitId) {
         Objects.requireNonNull(commitId, "commitId must not be null");
-        getCommit(commitId); // validate existence
+        getCommit(commitId);
 
-        MutableGraphState replayed = new MutableGraphState();
-        for (int i = 0; i <= commitId.value(); i++) {
-            Commit commit = commits.get(i);
+        List<Commit> firstParentLineage = new ArrayList<>();
+        CommitId cursor = commitId;
+        while (cursor != null) {
+            Commit commit = commits.get((int) cursor.value());
+            firstParentLineage.add(commit);
+            cursor = commit.parentId().orElse(null);
+        }
+        Collections.reverse(firstParentLineage);
+
+        MutableGraphState replayed = new MutableGraphState(sharedUserEntityIdAllocator);
+        for (Commit commit : firstParentLineage) {
             for (Change change : commit.changes()) {
                 replayed.applyReplayChange(change);
             }
@@ -161,33 +351,55 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
         return new InMemoryGraphSnapshot(replayed);
     }
 
-    CommitId publishTransactionCommit(
+    MutableGraphState stateCopyForBranch(String branchName) {
+        return snapshots.get(branchHead(branchName)).copyState();
+    }
+
+    CommitId publishBranchCommit(
+            String branchName,
             CommitId expectedBaseCommitId,
+            DataCategory dataCategory,
             Actor actor,
             Reason reason,
             Optional<String> correlationId,
             MutableGraphState committedState,
             List<Change> changes
     ) {
-        if (!expectedBaseCommitId.equals(headCommitId)) {
+        CommitId currentBranchHead = branchHead(branchName);
+        if (!expectedBaseCommitId.equals(currentBranchHead)) {
             throw new TransactionStateException(
-                    "Concurrent commit conflict: transaction based on " + expectedBaseCommitId
-                            + " but head is now " + headCommitId);
+                    "Concurrent commit conflict on branch '" + branchName + "': transaction based on "
+                            + expectedBaseCommitId + " but head is now " + currentBranchHead);
         }
-        return appendCommit(actor, reason, correlationId, committedState, changes);
+        return appendCommit(
+                branchName, List.of(currentBranchHead), dataCategory, actor, reason, correlationId, committedState, changes);
+    }
+
+    private Branch requireBranch(String branchName) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        Branch branch = branches.get(branchName);
+        if (branch == null) {
+            throw new BranchNotFoundException("Branch not found: " + branchName);
+        }
+        return branch;
     }
 
     private CommitId appendCommit(
+            String branchName,
+            List<CommitId> parentIds,
+            DataCategory dataCategory,
             Actor actor,
             Reason reason,
             Optional<String> correlationId,
             MutableGraphState nextState,
             List<Change> changes
     ) {
-        CommitId nextId = headCommitId.next();
+        CommitId nextId = new CommitId(commits.size());
         Commit commit = new Commit(
                 nextId,
-                Optional.of(headCommitId),
+                parentIds,
+                branchName,
+                dataCategory,
                 actor,
                 reason,
                 correlationId,
@@ -196,126 +408,7 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
         );
         commits.add(commit);
         snapshots.put(nextId, new InMemoryGraphSnapshot(nextState.copy()));
-        this.headCommitId = nextId;
-        this.headState = nextState;
+        branches.put(branchName, new Branch(branchName, nextId));
         return nextId;
-    }
-
-    private void applyInverseChange(MutableGraphState working, Change change, List<Change> counterChanges) {
-        switch (change) {
-            case Change.EdgeConnected(Edge edge) -> {
-                Edge current = working.edges.get(edge.id());
-                if (current == null) {
-                    throw new RevertConflictException("Cannot revert EdgeConnected " + edge.id() + ": edge no longer exists");
-                }
-                if (!working.findOutgoingEdges(edge.id()).isEmpty() || !working.findIncomingEdges(edge.id()).isEmpty()) {
-                    throw new RevertConflictException(
-                            "Cannot revert EdgeConnected " + edge.id() + ": dependent edges still reference it");
-                }
-                working.removeEdge(edge.id());
-                counterChanges.add(new Change.EdgeDisconnected(current));
-            }
-            case Change.EdgeDisconnected(Edge edge) -> {
-                if (working.edges.containsKey(edge.id())) {
-                    throw new RevertConflictException("Cannot revert EdgeDisconnected " + edge.id() + ": edge already exists");
-                }
-                EntityNode src = working.entities.get(edge.sourceId());
-                EntityNode pred = working.entities.get(edge.predicateId());
-                EntityNode tgt = working.entities.get(edge.targetId());
-                if (src == null || pred == null || tgt == null) {
-                    throw new RevertConflictException(
-                            "Cannot revert EdgeDisconnected " + edge.id() + ": endpoint or predicate no longer exists");
-                }
-                try {
-                    GraphSchemaValidator.validateConnection(working, src, pred, tgt);
-                } catch (SchemaViolationException ex) {
-                    throw new RevertConflictException(
-                            "Cannot revert EdgeDisconnected " + edge.id() + ": " + ex.getMessage());
-                }
-                working.putEdge(edge);
-                counterChanges.add(new Change.EdgeConnected(edge));
-            }
-            case Change.ValueUpdated(EntityId entityId, Value previousValue, Value newValue) -> {
-                EntityNode current = working.entities.get(entityId);
-                if (current == null || current.kind() != EntityKind.VALUE) {
-                    throw new RevertConflictException("Cannot revert ValueUpdated on " + entityId + ": entity missing or not VALUE");
-                }
-                Value liveValue = current.payload().orElseThrow();
-                if (!liveValue.equals(newValue)) {
-                    throw new RevertConflictException(
-                            "Cannot revert ValueUpdated on " + entityId + ": current value " + liveValue
-                                    + " differs from expected " + newValue);
-                }
-                if (working.isUniqueValueType(current.typeId()) && !previousValue.equals(newValue)) {
-                    Map<Value, EntityId> idx = working.uniqueValuesByType.get(current.typeId());
-                    if (idx != null) {
-                        EntityId owner = idx.get(previousValue);
-                        if (owner != null && !owner.equals(entityId)) {
-                            throw new RevertConflictException(
-                                    "Cannot revert ValueUpdated on " + entityId + ": previous unique value "
-                                            + previousValue + " is now owned by " + owner);
-                        }
-                        idx.remove(newValue);
-                        idx.put(previousValue, entityId);
-                    }
-                }
-                if (BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE.equals(current.typeId())
-                        && previousValue instanceof Value.StringValue(String oldName)) {
-                    List<Edge> nameHolders = working.findIncomingEdges(entityId, BootstrapIds.HAS_NAME);
-                    if (!nameHolders.isEmpty()) {
-                        EntityNode holder = working.entities.get(nameHolders.getFirst().sourceId());
-                        boolean isPredicate = holder != null && BootstrapIds.META_PREDICATE_TYPE.equals(holder.typeId());
-                        Map<String, EntityId> nameMap = isPredicate ? working.predicateByName : working.typeByName;
-                        EntityId existingOwner = nameMap.get(oldName);
-                        if (existingOwner != null && !existingOwner.equals(nameHolders.getFirst().sourceId())) {
-                            throw new RevertConflictException(
-                                    "Cannot revert schema rename to '" + oldName + "': name is already taken by " + existingOwner);
-                        }
-                    }
-                }
-                working.putEntity(new EntityNode(entityId, current.typeId(), EntityKind.VALUE, Optional.of(previousValue)));
-                counterChanges.add(new Change.ValueUpdated(entityId, newValue, previousValue));
-            }
-            case Change.EntityCreated(EntityNode node) -> {
-                EntityNode current = working.entities.get(node.id());
-                if (current == null) {
-                    throw new RevertConflictException("Cannot revert EntityCreated " + node.id() + ": entity no longer exists");
-                }
-                for (Edge edge : working.edges.values()) {
-                    if (edge.sourceId().equals(node.id())
-                            || edge.predicateId().equals(node.id())
-                            || edge.targetId().equals(node.id())) {
-                        throw new RevertConflictException(
-                                "Cannot revert EntityCreated " + node.id() + ": edge " + edge.id() + " still references it");
-                    }
-                }
-                for (EntityNode other : working.entities.values()) {
-                    if (!other.id().equals(node.id()) && other.typeId().equals(node.id())) {
-                        throw new RevertConflictException(
-                                "Cannot revert EntityCreated " + node.id() + ": entity " + other.id() + " still uses it as type");
-                    }
-                }
-                working.entities.remove(node.id());
-                counterChanges.add(new Change.EntityRemoved(current));
-            }
-            case Change.EntityRemoved(EntityNode node) -> {
-                if (working.entities.containsKey(node.id())) {
-                    throw new RevertConflictException("Cannot revert EntityRemoved " + node.id() + ": entity already exists");
-                }
-                if (!node.typeId().isBootstrap() && !working.entities.containsKey(node.typeId())) {
-                    throw new RevertConflictException(
-                            "Cannot revert EntityRemoved " + node.id() + ": type " + node.typeId() + " no longer exists");
-                }
-                if (node.kind() == EntityKind.VALUE && working.isUniqueValueType(node.typeId())) {
-                    Map<Value, EntityId> idx = working.uniqueValuesByType.get(node.typeId());
-                    if (idx != null && idx.containsKey(node.payload().orElseThrow())) {
-                        throw new RevertConflictException(
-                                "Cannot revert EntityRemoved " + node.id() + ": unique value already taken");
-                    }
-                }
-                working.putEntity(node);
-                counterChanges.add(new Change.EntityCreated(node));
-            }
-        }
     }
 }

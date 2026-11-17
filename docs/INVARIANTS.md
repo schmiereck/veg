@@ -1,6 +1,6 @@
 # Systeminvarianten (VEG)
 
-Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müssen diese Invarianten zu jedem Zeitpunkt einhalten. Die Verifikation erfolgt über `Stage1ContractTestSuite`, `Stage2ContractTestSuite`, `Stage3ContractTestSuite` und die Property-Based Tests (`GraphInvariantsProperties`, `VersionedDatabaseProperties`).
+Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müssen diese Invarianten zu jedem Zeitpunkt einhalten. Die Verifikation erfolgt über `Stage1ContractTestSuite`, `Stage2ContractTestSuite`, `Stage3ContractTestSuite`, `Stage4ContractTestSuite` und die Property-Based Tests (`GraphInvariantsProperties`, `VersionedDatabaseProperties`, `BranchMergeProperties`).
 
 | ID | Invariante | Beschreibung & Prüfkriterium |
 |---|---|---|
@@ -17,3 +17,6 @@ Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müss
 | **I-11** | **Unveränderliche Snapshots & Transaktions-Isolation** | Offene Transaktionsänderungen bleiben bis zum `commit()` unsichtbar; ältere Snapshots (`asOf(commitId)`) mutieren durch spätere Commits oder Schemaänderungen niemals. |
 | **I-12** | **Deterministische Replay-Äquivalenz** | Das Abspielen der persistierten `Change`-Liste aller Commits von `c0` bis `cN` (`replayAsOf(cN)`) erzeugt exakt denselben Graph- und Schema-Zustand wie `asOf(cN)` (`T15`). |
 | **I-13** | **Historien-erhaltender Revert** | Ein `revert(commitId)` löscht keinen bestehenden Commit, sondern erzeugt einen neuen Gegen-Commit (`V-10`); Konflikte durch spätere Abhängigkeiten scheitern atomar mit `RevertConflictException`. |
+| **I-14** | **Branch-Isolation & Strukturelle Teilung** | Branch-lokale Commits berühren keinen anderen Branch (`V-05`); das Anlegen neuer Branches kopiert keine Entities oder Edges (`T16`, `P-04`) und teilt einen kollisionsfreien `EntityId`-Allokator über den gesamten DAG. |
+| **I-15** | **Staging-Abhängigkeitsintegrität** | Selektives Staging darf keinen Commit veröffentlichen, dessen `stagedChanges` auf ungestagte Schema-Typen, Endpunkte oder abhängige Kanten verweisen (`MissingDependencyException`, `V-06`). |
+| **I-16** | **Konfliktsicheres Drei-Wege-Merge & Betriebsdatenschutz** | Kein stillschweigendes Last-Writer-Wins: konkurrierende Schema-, Constraint-, Shared-Value-, Functional- oder Edge-Lösch-Konflikte brechen das Merge ohne Veränderung des Ziel-Branches ab (`H5`, `T11`, `T12`), und `MergePolicy.developmentDefault()` filtert `OPERATIONAL`/`TEST`-Commits heraus (`V-13`). |
