@@ -25,7 +25,7 @@ class VegCliMainTest {
 
         assertThat(code).isZero();
         String stdout = outBuf.toString(StandardCharsets.UTF_8);
-        assertThat(stdout).contains("T01:", "T02:", "T03:", "T04:", "VEG Stage 3", "replay matches live=true", "VEG Stage 4", "Merge succeeded=true");
+        assertThat(stdout).contains("T01:", "T02:", "T03:", "T04:", "VEG Stage 3", "replay matches live=true", "VEG Stage 4", "Merge succeeded=true", "VEG Stage 5", "HISTORICAL_HEAD_DENY");
     }
 
     @Test

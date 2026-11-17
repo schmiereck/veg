@@ -2,14 +2,18 @@ package io.veg.engine.memory;
 
 import io.veg.engine.GraphTransaction;
 import io.veg.engine.TransactionStateException;
+import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
 import io.veg.model.Change;
 import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
+import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.PropagationDirection;
 import io.veg.model.Reason;
 import io.veg.model.SavepointId;
 import io.veg.model.Value;
@@ -178,6 +182,32 @@ final class InMemoryTransaction implements GraphTransaction {
     }
     @Override public void enableUniqueValues(EntityId valueTypeId) { ensureOpen(); delegate.enableUniqueValues(valueTypeId); }
 
+    @Override public EntityId definePrincipal(String principalId) { ensureOpen(); return delegate.definePrincipal(principalId); }
+    @Override public EntityId addGroupMember(EntityId memberPrincipalId, EntityId groupPrincipalId) {
+        ensureOpen();
+        return delegate.addGroupMember(memberPrincipalId, groupPrincipalId);
+    }
+    @Override public EntityId grantPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        ensureOpen();
+        return delegate.grantPermission(principalEntityId, permission, targetId);
+    }
+    @Override public EntityId denyPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        ensureOpen();
+        return delegate.denyPermission(principalEntityId, permission, targetId);
+    }
+    @Override public EntityId definePermissionPropagation(EntityId predicateId, PropagationDirection direction, Permission permission) {
+        ensureOpen();
+        return delegate.definePermissionPropagation(predicateId, direction, permission);
+    }
+    @Override public void defineInversePredicate(EntityId predicateId, EntityId inversePredicateId) {
+        ensureOpen();
+        delegate.defineInversePredicate(predicateId, inversePredicateId);
+    }
+    @Override public void defineSubPredicate(EntityId subPredicateId, EntityId superPredicateId) {
+        ensureOpen();
+        delegate.defineSubPredicate(subPredicateId, superPredicateId);
+    }
+
     @Override public Optional<EntityNode> findEntity(EntityId id) { ensureOpen(); return delegate.findEntity(id); }
     @Override public Optional<Edge> findEdge(EntityId edgeId) { ensureOpen(); return delegate.findEdge(edgeId); }
     @Override public Optional<EntityId> findTypeByName(String name) { ensureOpen(); return delegate.findTypeByName(name); }
@@ -206,4 +236,25 @@ final class InMemoryTransaction implements GraphTransaction {
     @Override public long edgeCount() { ensureOpen(); return delegate.edgeCount(); }
     @Override public List<EntityNode> allEntities() { ensureOpen(); return delegate.allEntities(); }
     @Override public List<Edge> allEdges() { ensureOpen(); return delegate.allEdges(); }
+    @Override public Optional<EntityId> findPrincipalByName(String principalId) { ensureOpen(); return delegate.findPrincipalByName(principalId); }
+    @Override public AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId) {
+        ensureOpen();
+        return delegate.evaluateAccess(principalId, permission, targetId);
+    }
+    @Override public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId) {
+        ensureOpen();
+        return delegate.findDerivedOutgoingAssertions(sourceId);
+    }
+    @Override public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
+        ensureOpen();
+        return delegate.findDerivedOutgoingAssertions(sourceId, predicateId);
+    }
+    @Override public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId) {
+        ensureOpen();
+        return delegate.findAllOutgoingAssertions(sourceId);
+    }
+    @Override public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
+        ensureOpen();
+        return delegate.findAllOutgoingAssertions(sourceId, predicateId);
+    }
 }

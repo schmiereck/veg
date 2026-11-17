@@ -131,4 +131,26 @@ public interface VersionedGraphDatabase {
             Reason reason,
             Consumer<GraphSession> conflictResolver
     );
+
+    // --- Stage 5: Branch restrictions & authorized time-travel reads (S-05, T13, T14) ---
+
+    void restrictBranchReadAccess(String branchName, java.util.Set<String> allowedPrincipalIds);
+
+    AuthorizedGraphReader authorizedCurrentSnapshot(String principalId);
+
+    default AuthorizedGraphReader authorizedCurrentSnapshot(Actor actor) {
+        return authorizedCurrentSnapshot(java.util.Objects.requireNonNull(actor, "actor").id());
+    }
+
+    AuthorizedGraphReader authorizedBranchSnapshot(String branchName, String principalId);
+
+    default AuthorizedGraphReader authorizedBranchSnapshot(String branchName, Actor actor) {
+        return authorizedBranchSnapshot(branchName, java.util.Objects.requireNonNull(actor, "actor").id());
+    }
+
+    AuthorizedGraphReader authorizedAsOf(CommitId commitId, String principalId);
+
+    default AuthorizedGraphReader authorizedAsOf(CommitId commitId, Actor actor) {
+        return authorizedAsOf(commitId, java.util.Objects.requireNonNull(actor, "actor").id());
+    }
 }

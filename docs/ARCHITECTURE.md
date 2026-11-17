@@ -69,3 +69,12 @@ Gemäß Punkt 8 des Startauftrags dokumentieren wir explizit, welche Stufe-1-Ann
    In Stufe 1 erzwingt `InMemoryGraphEngine` einen global eindeutigen Typnamen in einer flachen `Map<String, EntityId>`. In Stufe 4 kann Branch A einen Typ `Customer` einführen und Branch B ebenfalls (mit anderer `EntityId` oder anderen Attributen). Die Namensindizes müssen dann branch-/snapshot-lokal sein, und der 3-Wege-Merge benötigt eine explizite Konfliktauflösung auf Schema-Ebene (`V-07`).
 6. **Risiko 4 — `HAS_DOMAIN` / `HAS_RANGE` als Einzelkanten (`size() == 1`):**  
    Aktuell erwartet `resolveSingleSchemaTarget` genau eine Domain- und eine Range-Kante pro Prädikat. Für Vererbung (`M-06`) oder Union-Typen in Stufe 2/3 muss die Constraint-Auflösung auf Typ-Hierarchie-Traversals oder Mehrfach-Constraints verallgemeinert werden.
+
+## Stufe-5-Modularisierung (`veg-engine-memory`)
+
+Um `InMemoryGraphEngine` dauerhaft schlank zu halten, kapseln dedizierte Paketklassen die Querschnittsaufgaben der Zugriffskontrolle und Inferenz:
+
+- `AccessControlOperationsHandler` — Anlage und Validierung graphbasierter Principals (`META_PRINCIPAL_TYPE`), Gruppen (`MEMBER_OF_GROUP`), ACL-Einträge (`META_ACL_ENTRY_TYPE`), Propagationsregeln (`META_PROPAGATION_RULE_TYPE`) sowie Prädikat-Relationen (`HAS_INVERSE_PREDICATE`, `HAS_SUPER_PREDICATE`).
+- `PermissionEvaluator` — Zyklussichere BFS-Evaluation über Gruppen, Typen, Kantenendpunkte und `PropagationRule`s unter **Default Deny** und **"Verbieten gewinnt"** inkl. `AccessDecision`-Diagnosepfad.
+- `SemanticInferenceEngine` — Zyklussichere Query-Time-Auflösung expliziter vs. abgeleiteter Aussagen (`DerivedAssertion`).
+- `AuthorizedGraphReaderImpl` — Akteursspezifischer `AuthorizedGraphReader` mit stiller Filterung, `AccessDeniedException`, Branch-Restriktionen (`S-05`) und `HEAD`-Rückwärtsprüfung für `authorizedAsOf` (`T14`).

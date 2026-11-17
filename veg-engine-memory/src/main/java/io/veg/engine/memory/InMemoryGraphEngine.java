@@ -7,13 +7,16 @@ import io.veg.engine.ReferentialIntegrityException;
 import io.veg.engine.SchemaViolationException;
 import io.veg.engine.TypeMismatchException;
 import io.veg.engine.UniquenessViolationException;
+import io.veg.model.AccessEffect;
 import io.veg.model.BootstrapIds;
 import io.veg.model.Change;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.PropagationDirection;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
@@ -33,6 +36,7 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
     private MutableGraphState state;
     private final RecordedMutationSink mutations;
     private final SchemaOperationsHandler schemaOps;
+    private final AccessControlOperationsHandler aclOps;
 
     public InMemoryGraphEngine() {
         this(new MutableGraphState(), null);
@@ -43,6 +47,7 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
         this.state = Objects.requireNonNull(initialState, "initialState must not be null");
         this.mutations = new RecordedMutationSink(changeRecorder);
         this.schemaOps = new SchemaOperationsHandler(mutations);
+        this.aclOps = new AccessControlOperationsHandler(mutations);
     }
 
     @Override
@@ -82,6 +87,41 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
     @Override
     public void enableUniqueValues(EntityId valueTypeId) {
         schemaOps.enableUniqueValues(state, valueTypeId);
+    }
+
+    @Override
+    public EntityId definePrincipal(String principalId) {
+        return aclOps.definePrincipal(state, principalId);
+    }
+
+    @Override
+    public EntityId addGroupMember(EntityId memberPrincipalId, EntityId groupPrincipalId) {
+        return aclOps.addGroupMember(state, memberPrincipalId, groupPrincipalId);
+    }
+
+    @Override
+    public EntityId grantPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        return aclOps.createAclEntry(state, principalEntityId, AccessEffect.ALLOW, permission, targetId);
+    }
+
+    @Override
+    public EntityId denyPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        return aclOps.createAclEntry(state, principalEntityId, AccessEffect.DENY, permission, targetId);
+    }
+
+    @Override
+    public EntityId definePermissionPropagation(EntityId predicateId, PropagationDirection direction, Permission permission) {
+        return aclOps.definePermissionPropagation(state, predicateId, direction, permission);
+    }
+
+    @Override
+    public void defineInversePredicate(EntityId predicateId, EntityId inversePredicateId) {
+        aclOps.defineInversePredicate(state, predicateId, inversePredicateId);
+    }
+
+    @Override
+    public void defineSubPredicate(EntityId subPredicateId, EntityId superPredicateId) {
+        aclOps.defineSubPredicate(state, subPredicateId, superPredicateId);
     }
 
     @Override

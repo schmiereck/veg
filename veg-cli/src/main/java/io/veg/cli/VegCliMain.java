@@ -8,6 +8,7 @@ import io.veg.benchmarks.BaselineBenchmarkRunner;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkConfig;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkReport;
 import io.veg.benchmarks.BaselineBenchmarkRunner.IterationResult;
+import io.veg.engine.AuthorizedGraphReader;
 import io.veg.engine.GraphReader;
 import io.veg.engine.GraphSession;
 import io.veg.engine.GraphTransaction;
@@ -16,15 +17,19 @@ import io.veg.engine.TypeMismatchException;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
 import io.veg.engine.memory.InMemoryVersionedDatabase;
+import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
 import io.veg.model.BootstrapIds;
 import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
+import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
+import io.veg.model.Permission;
+import io.veg.model.PropagationDirection;
 import io.veg.model.Reason;
 import io.veg.model.SavepointId;
 import io.veg.model.Value;
@@ -197,6 +202,64 @@ public final class VegCliMain {
                 + ", main has Region=" + mainSnap.findTypeByName("Region").isPresent()
                 + ", excluded operational customer=" + mainSnap.findEntity(opCustomer).isEmpty()
                 + ", unstaged draft kept separate=" + mainSnap.findEntity(unstagedDraft).isEmpty());
+
+        runStage5Demo(out);
+    }
+
+    private static void runStage5Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 5 Access Control (Deny Wins), Time-Travel Security & Derived Assertions Demo ===");
+        VersionedGraphDatabase db = new InMemoryVersionedDatabase();
+        Actor admin = Actor.user("admin");
+        EntityId project;
+        EntityId doc;
+        EntityId bob;
+        EntityId salaryVal;
+        CommitId c1;
+        try (GraphTransaction tx = db.beginTransaction(admin, Reason.of("Stage 5 ACL and semantic rules setup"))) {
+            EntityId projectType = tx.defineObjectType("Project");
+            EntityId docType = tx.defineObjectType("Document");
+            EntityId salaryType = tx.defineValueType("Salary", ValueType.INT);
+            EntityId containsDoc = tx.definePredicate("containsDocument", projectType, docType);
+            EntityId containedIn = tx.definePredicate("containedIn", docType, projectType);
+            EntityId hasBudget = tx.definePredicate("hasBudget", projectType, salaryType);
+
+            tx.defineInversePredicate(containsDoc, containedIn);
+            tx.definePermissionPropagation(containsDoc, PropagationDirection.OUTGOING, Permission.READ);
+
+            project = tx.createObject(projectType);
+            doc = tx.createObject(docType);
+            salaryVal = tx.createValue(salaryType, Value.of(500_000L));
+            tx.connect(project, containsDoc, doc);
+            tx.connect(project, hasBudget, salaryVal);
+
+            EntityId alice = tx.definePrincipal("alice");
+            bob = tx.definePrincipal("bob");
+            tx.grantPermission(alice, Permission.READ, project);
+            tx.grantPermission(bob, Permission.READ, doc);
+            tx.denyPermission(alice, Permission.READ, hasBudget);
+            c1 = tx.commit();
+        }
+
+        try (GraphTransaction tx = db.beginTransaction(admin, Reason.of("Revoke Bob read via Deny Wins"))) {
+            tx.denyPermission(bob, Permission.READ, doc);
+            tx.commit();
+        }
+
+        AuthorizedGraphReader aliceReader = db.authorizedCurrentSnapshot("alice");
+        AccessDecision aliceReadDoc = aliceReader.explainAccess(Permission.READ, doc);
+        AccessDecision aliceWriteDoc = aliceReader.explainAccess(Permission.WRITE, doc);
+        AccessDecision bobTimeTravel = db.authorizedAsOf(c1, "bob").explainAccess(Permission.READ, doc);
+        List<DerivedAssertion> derived = db.currentSnapshot().findDerivedOutgoingAssertions(doc);
+
+        out.println("Alice read Doc via propagation=" + aliceReadDoc.allowed()
+                + " (" + aliceReadDoc.reason() + ", writeAllowed=" + aliceWriteDoc.allowed() + ")");
+        out.println("Alice salaryVal hidden=" + aliceReader.findEntity(salaryVal).isEmpty()
+                + ", Bob time-travel after revoke allowed=" + bobTimeTravel.allowed()
+                + " (" + bobTimeTravel.reason() + ")");
+        out.println("Doc explicit outgoing=" + db.currentSnapshot().findOutgoingEdges(doc).size()
+                + ", derived inverse count=" + derived.size()
+                + " (" + derived.getFirst().origin() + ")");
     }
 
     private static int runBenchmark(String[] args, PrintStream out, PrintStream err) throws IOException {

@@ -32,6 +32,7 @@ final class MutableGraphState {
 
     final Map<String, EntityId> typeByName;
     final Map<String, EntityId> predicateByName;
+    final Map<String, EntityId> principalByName;
     final Map<EntityId, Map<Value, EntityId>> uniqueValuesByType;
 
     final AtomicLong userEntityIdAllocator;
@@ -48,6 +49,7 @@ final class MutableGraphState {
         this.incomingEdges = new HashMap<>();
         this.typeByName = new HashMap<>();
         this.predicateByName = new HashMap<>();
+        this.principalByName = new HashMap<>();
         this.uniqueValuesByType = new HashMap<>();
         this.userEntityIdAllocator = sharedUserEntityIdAllocator;
         this.nextBootstrapAuxId = 100L;
@@ -60,6 +62,7 @@ final class MutableGraphState {
         this.incomingEdges = copyAdjacency(source.incomingEdges);
         this.typeByName = new HashMap<>(source.typeByName);
         this.predicateByName = new HashMap<>(source.predicateByName);
+        this.principalByName = new HashMap<>(source.principalByName);
         this.uniqueValuesByType = new HashMap<>(source.uniqueValuesByType.size());
         for (var entry : source.uniqueValuesByType.entrySet()) {
             this.uniqueValuesByType.put(entry.getKey(), new HashMap<>(entry.getValue()));
@@ -127,6 +130,7 @@ final class MutableGraphState {
         incomingEdges.clear();
         typeByName.clear();
         predicateByName.clear();
+        principalByName.clear();
         uniqueValuesByType.clear();
 
         long maxUser = EntityId.USER_MIN_ID - 1;
@@ -162,6 +166,8 @@ final class MutableGraphState {
                 if (BootstrapIds.META_VALUE_TYPE.equals(node.typeId()) && isUniqueValueType(node.id())) {
                     uniqueValuesByType.computeIfAbsent(node.id(), ignored -> new HashMap<>());
                 }
+            } else if (node.kind() == EntityKind.OBJECT && BootstrapIds.META_PRINCIPAL_TYPE.equals(node.typeId())) {
+                resolveName(node.id()).ifPresent(name -> principalByName.put(name, node.id()));
             }
         }
 

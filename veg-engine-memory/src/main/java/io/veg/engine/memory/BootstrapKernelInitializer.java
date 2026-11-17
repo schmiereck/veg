@@ -54,6 +54,10 @@ final class BootstrapKernelInitializer {
         registerType(BootstrapIds.MUTABILITY_IMMUTABLE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.mutability.Immutable");
         registerType(BootstrapIds.MUTABILITY_SHARED_MUTABLE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.mutability.SharedMutable");
 
+        registerType(BootstrapIds.META_PRINCIPAL_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.PrincipalType");
+        registerType(BootstrapIds.META_ACL_ENTRY_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.AclEntryType");
+        registerType(BootstrapIds.META_PROPAGATION_RULE_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.PropagationRuleType");
+
         registerPredicate(BootstrapIds.HAS_NAME, "veg.meta.hasName");
         registerPredicate(BootstrapIds.HAS_SCALAR_TYPE, "veg.meta.hasScalarType");
         registerPredicate(BootstrapIds.HAS_DOMAIN, "veg.meta.hasDomain");
@@ -63,6 +67,17 @@ final class BootstrapKernelInitializer {
         registerPredicate(BootstrapIds.HAS_UNIQUE_TRIPLE, "veg.meta.hasUniqueTriple");
         registerPredicate(BootstrapIds.HAS_UNIQUE_VALUES, "veg.meta.hasUniqueValues");
         registerPredicate(BootstrapIds.HAS_MUTABILITY, "veg.meta.hasMutability");
+
+        registerPredicate(BootstrapIds.MEMBER_OF_GROUP, "veg.acl.memberOfGroup");
+        registerPredicate(BootstrapIds.ACL_PRINCIPAL, "veg.acl.principal");
+        registerPredicate(BootstrapIds.ACL_TARGET, "veg.acl.target");
+        registerPredicate(BootstrapIds.ACL_EFFECT, "veg.acl.effect");
+        registerPredicate(BootstrapIds.ACL_PERMISSION, "veg.acl.permission");
+        registerPredicate(BootstrapIds.PROPAGATION_PREDICATE, "veg.acl.propagationPredicate");
+        registerPredicate(BootstrapIds.PROPAGATION_DIRECTION, "veg.acl.propagationDirection");
+        registerPredicate(BootstrapIds.PROPAGATION_PERMISSION, "veg.acl.propagationPermission");
+        registerPredicate(BootstrapIds.HAS_INVERSE_PREDICATE, "veg.meta.hasInversePredicate");
+        registerPredicate(BootstrapIds.HAS_SUPER_PREDICATE, "veg.meta.hasSuperPredicate");
 
         addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_STRING);
         addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_INT);
@@ -96,6 +111,10 @@ final class BootstrapKernelInitializer {
         attachName(BootstrapIds.MUTABILITY_IMMUTABLE, "veg.mutability.Immutable");
         attachName(BootstrapIds.MUTABILITY_SHARED_MUTABLE, "veg.mutability.SharedMutable");
 
+        attachName(BootstrapIds.META_PRINCIPAL_TYPE, "veg.meta.PrincipalType");
+        attachName(BootstrapIds.META_ACL_ENTRY_TYPE, "veg.meta.AclEntryType");
+        attachName(BootstrapIds.META_PROPAGATION_RULE_TYPE, "veg.meta.PropagationRuleType");
+
         attachName(BootstrapIds.HAS_NAME, "veg.meta.hasName");
         attachName(BootstrapIds.HAS_SCALAR_TYPE, "veg.meta.hasScalarType");
         attachName(BootstrapIds.HAS_DOMAIN, "veg.meta.hasDomain");
@@ -106,6 +125,17 @@ final class BootstrapKernelInitializer {
         attachName(BootstrapIds.HAS_UNIQUE_VALUES, "veg.meta.hasUniqueValues");
         attachName(BootstrapIds.HAS_MUTABILITY, "veg.meta.hasMutability");
 
+        attachName(BootstrapIds.MEMBER_OF_GROUP, "veg.acl.memberOfGroup");
+        attachName(BootstrapIds.ACL_PRINCIPAL, "veg.acl.principal");
+        attachName(BootstrapIds.ACL_TARGET, "veg.acl.target");
+        attachName(BootstrapIds.ACL_EFFECT, "veg.acl.effect");
+        attachName(BootstrapIds.ACL_PERMISSION, "veg.acl.permission");
+        attachName(BootstrapIds.PROPAGATION_PREDICATE, "veg.acl.propagationPredicate");
+        attachName(BootstrapIds.PROPAGATION_DIRECTION, "veg.acl.propagationDirection");
+        attachName(BootstrapIds.PROPAGATION_PERMISSION, "veg.acl.propagationPermission");
+        attachName(BootstrapIds.HAS_INVERSE_PREDICATE, "veg.meta.hasInversePredicate");
+        attachName(BootstrapIds.HAS_SUPER_PREDICATE, "veg.meta.hasSuperPredicate");
+
         attachPredicateMeta(BootstrapIds.HAS_NAME, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.META_VALUE_TYPE, BootstrapIds.META_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_DOMAIN, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.ANY_ENTITY);
@@ -115,6 +145,17 @@ final class BootstrapKernelInitializer {
         attachPredicateMeta(BootstrapIds.HAS_UNIQUE_TRIPLE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_UNIQUE_VALUES, BootstrapIds.META_VALUE_TYPE, BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_MUTABILITY, BootstrapIds.ANY_VALUE, BootstrapIds.META_TYPE);
+
+        attachPredicateMeta(BootstrapIds.MEMBER_OF_GROUP, BootstrapIds.META_PRINCIPAL_TYPE, BootstrapIds.META_PRINCIPAL_TYPE);
+        attachPredicateMeta(BootstrapIds.ACL_PRINCIPAL, BootstrapIds.META_ACL_ENTRY_TYPE, BootstrapIds.META_PRINCIPAL_TYPE);
+        attachPredicateMeta(BootstrapIds.ACL_TARGET, BootstrapIds.META_ACL_ENTRY_TYPE, BootstrapIds.ANY_ENTITY);
+        attachPredicateMeta(BootstrapIds.ACL_EFFECT, BootstrapIds.META_ACL_ENTRY_TYPE, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+        attachPredicateMeta(BootstrapIds.ACL_PERMISSION, BootstrapIds.META_ACL_ENTRY_TYPE, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+        attachPredicateMeta(BootstrapIds.PROPAGATION_PREDICATE, BootstrapIds.META_PROPAGATION_RULE_TYPE, BootstrapIds.META_PREDICATE_TYPE);
+        attachPredicateMeta(BootstrapIds.PROPAGATION_DIRECTION, BootstrapIds.META_PROPAGATION_RULE_TYPE, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+        attachPredicateMeta(BootstrapIds.PROPAGATION_PERMISSION, BootstrapIds.META_PROPAGATION_RULE_TYPE, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+        attachPredicateMeta(BootstrapIds.HAS_INVERSE_PREDICATE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.META_PREDICATE_TYPE);
+        attachPredicateMeta(BootstrapIds.HAS_SUPER_PREDICATE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.META_PREDICATE_TYPE);
     }
 
     private void registerType(EntityId id, EntityId metaTypeId, EntityKind kind, String name) {

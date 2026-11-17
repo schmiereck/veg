@@ -189,7 +189,16 @@ final class GraphSchemaValidator {
                 || BootstrapIds.HAS_MAX_INCOMING.equals(predicateId)
                 || BootstrapIds.HAS_UNIQUE_TRIPLE.equals(predicateId)
                 || BootstrapIds.HAS_UNIQUE_VALUES.equals(predicateId)
-                || BootstrapIds.HAS_MUTABILITY.equals(predicateId);
+                || BootstrapIds.HAS_MUTABILITY.equals(predicateId)
+                || BootstrapIds.ACL_PRINCIPAL.equals(predicateId)
+                || BootstrapIds.ACL_TARGET.equals(predicateId)
+                || BootstrapIds.ACL_EFFECT.equals(predicateId)
+                || BootstrapIds.ACL_PERMISSION.equals(predicateId)
+                || BootstrapIds.PROPAGATION_PREDICATE.equals(predicateId)
+                || BootstrapIds.PROPAGATION_DIRECTION.equals(predicateId)
+                || BootstrapIds.PROPAGATION_PERMISSION.equals(predicateId)
+                || BootstrapIds.HAS_INVERSE_PREDICATE.equals(predicateId)
+                || BootstrapIds.HAS_SUPER_PREDICATE.equals(predicateId);
     }
 
     static boolean matchesTypeConstraint(EntityNode node, EntityId constraintTypeId) {

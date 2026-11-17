@@ -12,7 +12,9 @@ import io.veg.model.DataCategory;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.PropagationDirection;
 import io.veg.model.Reason;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
@@ -295,5 +297,59 @@ final class InMemoryStagingWorkspace extends AbstractGraphReader implements Stag
         int start = rawRecorder.size();
         delegate.enableUniqueValues(valueTypeId);
         recordGroup(valueTypeId, start);
+    }
+
+    @Override
+    public EntityId definePrincipal(String principalId) {
+        int start = rawRecorder.size();
+        EntityId id = delegate.definePrincipal(principalId);
+        recordGroup(id, start);
+        return id;
+    }
+
+    @Override
+    public EntityId addGroupMember(EntityId memberPrincipalId, EntityId groupPrincipalId) {
+        int start = rawRecorder.size();
+        EntityId edgeId = delegate.addGroupMember(memberPrincipalId, groupPrincipalId);
+        recordGroup(edgeId, start);
+        return edgeId;
+    }
+
+    @Override
+    public EntityId grantPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        int start = rawRecorder.size();
+        EntityId aclId = delegate.grantPermission(principalEntityId, permission, targetId);
+        recordGroup(aclId, start);
+        return aclId;
+    }
+
+    @Override
+    public EntityId denyPermission(EntityId principalEntityId, Permission permission, EntityId targetId) {
+        int start = rawRecorder.size();
+        EntityId aclId = delegate.denyPermission(principalEntityId, permission, targetId);
+        recordGroup(aclId, start);
+        return aclId;
+    }
+
+    @Override
+    public EntityId definePermissionPropagation(EntityId predicateId, PropagationDirection direction, Permission permission) {
+        int start = rawRecorder.size();
+        EntityId ruleId = delegate.definePermissionPropagation(predicateId, direction, permission);
+        recordGroup(ruleId, start);
+        return ruleId;
+    }
+
+    @Override
+    public void defineInversePredicate(EntityId predicateId, EntityId inversePredicateId) {
+        int start = rawRecorder.size();
+        delegate.defineInversePredicate(predicateId, inversePredicateId);
+        recordGroup(predicateId, start);
+    }
+
+    @Override
+    public void defineSubPredicate(EntityId subPredicateId, EntityId superPredicateId) {
+        int start = rawRecorder.size();
+        delegate.defineSubPredicate(subPredicateId, superPredicateId);
+        recordGroup(subPredicateId, start);
     }
 }

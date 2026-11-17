@@ -1,7 +1,9 @@
 package io.veg.engine;
 
 import io.veg.model.EntityId;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.PropagationDirection;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
@@ -47,4 +49,20 @@ public interface GraphSession extends GraphReader {
     void updatePredicateConstraints(EntityId predicateId, PredicateConstraints newConstraints);
 
     void enableUniqueValues(EntityId valueTypeId);
+
+    // --- Stage 5: Graph access control & semantic predicate rules (S-01..S-03, M-12) ---
+
+    EntityId definePrincipal(String principalId);
+
+    EntityId addGroupMember(EntityId memberPrincipalId, EntityId groupPrincipalId);
+
+    EntityId grantPermission(EntityId principalEntityId, Permission permission, EntityId targetId);
+
+    EntityId denyPermission(EntityId principalEntityId, Permission permission, EntityId targetId);
+
+    EntityId definePermissionPropagation(EntityId predicateId, PropagationDirection direction, Permission permission);
+
+    void defineInversePredicate(EntityId predicateId, EntityId inversePredicateId);
+
+    void defineSubPredicate(EntityId subPredicateId, EntityId superPredicateId);
 }

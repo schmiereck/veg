@@ -1,5 +1,6 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.AuthorizedGraphReader;
 import io.veg.engine.BranchNotFoundException;
 import io.veg.engine.CommitNotFoundException;
 import io.veg.engine.DuplicateBranchOrTagException;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -46,6 +48,7 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
     private final Map<CommitId, InMemoryGraphSnapshot> snapshots = new HashMap<>();
     private final Map<String, Branch> branches = new LinkedHashMap<>();
     private final Map<String, Tag> tags = new LinkedHashMap<>();
+    private final Map<String, Set<String>> branchReadRestrictions = new HashMap<>();
 
     private String activeBranch = DEFAULT_BRANCH;
 
@@ -349,6 +352,54 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
         }
         replayed.rebuildDerivedIndexes();
         return new InMemoryGraphSnapshot(replayed);
+    }
+
+    @Override
+    public void restrictBranchReadAccess(String branchName, Set<String> allowedPrincipalIds) {
+        requireBranch(branchName);
+        Objects.requireNonNull(allowedPrincipalIds, "allowedPrincipalIds must not be null");
+        for (String id : allowedPrincipalIds) {
+            if (id == null || id.isBlank()) {
+                throw new IllegalArgumentException("allowedPrincipalIds must not contain null or blank principal IDs");
+            }
+        }
+        branchReadRestrictions.put(branchName, Set.copyOf(allowedPrincipalIds));
+    }
+
+    @Override
+    public AuthorizedGraphReader authorizedCurrentSnapshot(String principalId) {
+        return authorizedBranchSnapshot(activeBranch, principalId);
+    }
+
+    @Override
+    public AuthorizedGraphReader authorizedBranchSnapshot(String branchName, String principalId) {
+        Branch branch = requireBranch(branchName);
+        InMemoryGraphSnapshot snapshot = snapshots.get(branch.headCommitId());
+        return new AuthorizedGraphReaderImpl(
+                snapshot,
+                snapshot,
+                principalId,
+                branchName,
+                branchReadRestrictions.get(branchName)
+        );
+    }
+
+    @Override
+    public AuthorizedGraphReader authorizedAsOf(CommitId commitId, String principalId) {
+        Commit commit = getCommit(commitId);
+        InMemoryGraphSnapshot historicalSnapshot = snapshots.get(commitId);
+        String targetBranch = commit.branchName();
+        Branch branchObj = branches.get(targetBranch);
+        InMemoryGraphSnapshot headSnapshot = branchObj != null
+                ? snapshots.get(branchObj.headCommitId())
+                : snapshots.get(headCommitId());
+        return new AuthorizedGraphReaderImpl(
+                historicalSnapshot,
+                headSnapshot,
+                principalId,
+                targetBranch,
+                branchReadRestrictions.get(targetBranch)
+        );
     }
 
     MutableGraphState stateCopyForBranch(String branchName) {

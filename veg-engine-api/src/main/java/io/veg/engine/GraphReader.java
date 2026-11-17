@@ -1,12 +1,17 @@
 package io.veg.engine;
 
+import io.veg.model.AccessDecision;
+import io.veg.model.Actor;
+import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.ValueMutability;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -48,4 +53,20 @@ public interface GraphReader {
     List<EntityNode> allEntities();
 
     List<Edge> allEdges();
+
+    Optional<EntityId> findPrincipalByName(String principalId);
+
+    AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId);
+
+    default AccessDecision evaluateAccess(Actor actor, Permission permission, EntityId targetId) {
+        return evaluateAccess(Objects.requireNonNull(actor, "actor").id(), permission, targetId);
+    }
+
+    List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId);
+
+    List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId, EntityId predicateId);
+
+    List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId);
+
+    List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId, EntityId predicateId);
 }

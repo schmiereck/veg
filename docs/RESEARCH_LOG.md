@@ -194,3 +194,47 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 5):**  
   Versions- und branchbewusste Zugriffskontrolle auf Entity-, Relations- und Attributebene (`S-01`–`S-03`, `S-05`), deklarative Rechtevererbung entlang explizit freigegebener Relationstypen mit Default-Deny und Zyklusschutz (`T13`, `T14`) sowie minimale abgeleitete Aussagen (`inverse` / `subPropertyOf`, klar getrennt von expliziten Aussagen, `M-12`).
+
+---
+
+## Eintrag 05 — Stufe 5: Versionsbewusste Zugriffskontrolle ("Verbieten gewinnt") & abgeleitete Aussagen
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 5** (`S-01`–`S-03`, `S-05`, `M-12`, `T13`, `T14`) / **"Verbieten gewinnt" (Deny Wins) & Default Deny**:  
+  1. Eine rein im Graph modellierte Zugriffskontrolle (`META_PRINCIPAL_TYPE`, `META_ACL_ENTRY_TYPE`, `META_PROPAGATION_RULE_TYPE`) mit globalem "Verbieten gewinnt" ohne Kurzschluss auf `ALLOW` macht Rechte über Gruppen, Typ-Scopes und propagierende Relationstypen hinweg vollständig versionier-, merge- und erklärbar (`AccessDecision`, `S-03`).  
+  2. Zeitreisensichere Sichten (`AuthorizedGraphReader` auf `asOf(commitId)`) verhindern durch eine Rückwärtsprüfung gegen den aktuellen `HEAD` sowie Branch-Restriktionen (`S-05`) nachträgliches Auslesen widerrufener historischer Stände (`T14`).  
+  3. Semantische Prädikatregeln (`HAS_INVERSE_PREDICATE`, `HAS_SUPER_PREDICATE`) lassen sich zyklussicher zur Abfragezeit als `DerivedAssertion` (`AssertionOrigin`) auswerten, ohne explizite Kantenbestände (`findOutgoingEdges`) zu verunreinigen (`M-12`).
+
+- **Implementiert:**  
+  - `veg-model`: `BootstrapIds` (`50..52`, `60..69`), `Permission`, `AccessEffect`, `PropagationDirection`, `AccessReason`, `AccessDecision`, `AssertionOrigin`, `DerivedAssertion`.
+  - `veg-engine-api`: `AuthorizedGraphReader`, `AccessDeniedException`, erweiterte `GraphReader` (`findPrincipalByName`, `evaluateAccess`, `findDerivedOutgoingAssertions`, `findAllOutgoingAssertions`), `GraphSession` (`definePrincipal`, `addGroupMember`, `grantPermission`, `denyPermission`, `definePermissionPropagation`, `defineInversePredicate`, `defineSubPredicate`) und `VersionedGraphDatabase` (`restrictBranchReadAccess`, `authorizedCurrentSnapshot`, `authorizedBranchSnapshot`, `authorizedAsOf`).
+  - `veg-engine-memory` (modular ausgelagert statt Erweiterung von `InMemoryGraphEngine`): `AccessControlOperationsHandler`, `PermissionEvaluator`, `SemanticInferenceEngine`, `AuthorizedGraphReaderImpl`, dedizierter `principalByName`-Index in `MutableGraphState`, Erweiterung von `BootstrapKernelInitializer`, `GraphSchemaValidator`, `AbstractGraphReader`, `InMemoryTransaction`, `InMemoryStagingWorkspace` und `InMemoryVersionedDatabase`.
+  - `veg-test-fixtures` & Tests: `SecurityAndInferenceModelTest` (3 Tests), `Stage5ContractTestSuite` / `InMemoryStage5ContractTest` (22 Contract-Tests für `S-01`–`S-03`, `S-05`, `M-12`, `T13`, `T14`, Zyklen, Kanten-/Attribut-ACLs, `ADMIN` vs. `DENY WRITE`, Savepoints/Revert/Merge/Staging), `AccessControlProperties` (`jqwik`, 2 Properties × `tries = 60`).
+  - `veg-cli`: `runStage5Demo` in `VegCliMain` + Erweiterung von `VegCliMainTest`.
+  - Dokumentation: [ADR-0006](adr/0006-access-control-deny-wins-and-semantic-inference.md), Erweiterung von [INVARIANTS.md](INVARIANTS.md) (`I-17`–`I-19`), [ARCHITECTURE.md](ARCHITECTURE.md), [CONCEPT.md](CONCEPT.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **105 / 105 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 16 / 16 bestanden (`BranchAndMergeModelTest` 3, `ModelPrimitivesTest` 6, `SecurityAndInferenceModelTest` 3, `VersionedModelPrimitivesTest` 4)
+  - `veg-engine-memory`: 84 / 84 bestanden (`InMemoryStage1ContractTest` 6, `InMemoryStage2ContractTest` 5, `InMemoryStage3ContractTest` 23, `InMemoryStage4ContractTest` 22, `InMemoryStage5ContractTest` 22, `AccessControlProperties` 2 × `tries = 60`, `BranchMergeProperties` 1 × `tries = 25`, `GraphInvariantsProperties` 2 × `tries = 40`, `VersionedDatabaseProperties` 1 × `tries = 30`)
+  - `veg-benchmarks`: 2 / 2 bestanden
+  - `veg-cli`: 3 / 3 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  - `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo`: Exit-Code 0 (`Alice read Doc via propagation=true (INHERITED_ALLOW, writeAllowed=false)`, `Alice salaryVal hidden=true, Bob time-travel after revoke allowed=false (HISTORICAL_HEAD_DENY)`, `Doc explicit outgoing=0, derived inverse count=1 (DERIVED_INVERSE)`).
+  - `AccessControlProperties` (`tries = 60` auf zufälligen zyklischen Graphen): Deterministische Terminierung und übereinstimmendes `replayAsOf`-Ergebnis sowie Monotonie von `DENY` trotz beliebig vieler nachgelagerter `ALLOW`-Regeln bestätigt.
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt:** "Verbieten gewinnt" erfordert in Graphen mit Gruppen- und Kantenvererbung, dass selbst bei einem direkten `ALLOW` alle erreichbaren Propagationspfade weiter auf `DENY` geprüft werden — andernfalls könnten übergeordnete Verbote umgangen werden.
+  - **Wichtiges Modell-Detail:** Da in VEG jede Kante auch als `EntityKind.EDGE`-Knoten in `entities` repräsentiert wird, liefert `AuthorizedGraphReader.allEntities()` berechtigterweise auch lesbare Kanten-Entities, während gesperrte Kanten und Attributwerte konsequent ausgefiltert werden.
+
+- **Risiken und technische Schulden:**  
+  1. Bei sehr tiefen ACL-Hierarchien evaluiert `PermissionEvaluator` aktuell pro Abfrage dynamisch (BFS); Engine B/C (Stufe 7) sollte optionales Caching/Indizierung prüfen.
+  2. Eine Query-DSL sowie der RDF-/Turtle-Export (`T18`) folgen in Stufe 6.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** mit Stufe 6 (Storage-unabhängige Query-API/DSL & RDF-Export).
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 6):**  
+  Entwurf einer storage-unabhängigen Graph-Query-/Traversierungs-API (inkl. abgeleiteter Aussagen und `AuthorizedGraphReader`-Integration) sowie RDF-/Turtle-Export (`T18`).

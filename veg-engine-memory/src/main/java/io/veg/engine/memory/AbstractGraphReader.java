@@ -1,9 +1,12 @@
 package io.veg.engine.memory;
 
 import io.veg.engine.GraphReader;
+import io.veg.model.AccessDecision;
+import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.ValueMutability;
 
@@ -113,5 +116,41 @@ abstract class AbstractGraphReader implements GraphReader {
         return state().edges.values().stream()
                 .sorted(Comparator.comparing(Edge::id))
                 .toList();
+    }
+
+    @Override
+    public Optional<EntityId> findPrincipalByName(String principalId) {
+        return principalId == null ? Optional.empty() : Optional.ofNullable(state().principalByName.get(principalId));
+    }
+
+    @Override
+    public AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId) {
+        return PermissionEvaluator.evaluate(state(), principalId, permission, targetId);
+    }
+
+    @Override
+    public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId) {
+        Objects.requireNonNull(sourceId, "sourceId must not be null");
+        return SemanticInferenceEngine.findDerivedOutgoingAssertions(state(), sourceId, null);
+    }
+
+    @Override
+    public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
+        Objects.requireNonNull(sourceId, "sourceId must not be null");
+        Objects.requireNonNull(predicateId, "predicateId must not be null");
+        return SemanticInferenceEngine.findDerivedOutgoingAssertions(state(), sourceId, predicateId);
+    }
+
+    @Override
+    public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId) {
+        Objects.requireNonNull(sourceId, "sourceId must not be null");
+        return SemanticInferenceEngine.findAllOutgoingAssertions(state(), sourceId, null);
+    }
+
+    @Override
+    public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
+        Objects.requireNonNull(sourceId, "sourceId must not be null");
+        Objects.requireNonNull(predicateId, "predicateId must not be null");
+        return SemanticInferenceEngine.findAllOutgoingAssertions(state(), sourceId, predicateId);
     }
 }

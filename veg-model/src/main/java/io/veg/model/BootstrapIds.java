@@ -49,6 +49,23 @@ public final class BootstrapIds {
     public static final EntityId MUTABILITY_IMMUTABLE = new EntityId(40L);
     public static final EntityId MUTABILITY_SHARED_MUTABLE = new EntityId(41L);
 
+    // --- Stage 5: Access Control & Semantic Meta-Types (50..59) ---
+    public static final EntityId META_PRINCIPAL_TYPE = new EntityId(50L);
+    public static final EntityId META_ACL_ENTRY_TYPE = new EntityId(51L);
+    public static final EntityId META_PROPAGATION_RULE_TYPE = new EntityId(52L);
+
+    // --- Stage 5: Access Control & Semantic Meta-Predicates (60..79) ---
+    public static final EntityId MEMBER_OF_GROUP = new EntityId(60L);
+    public static final EntityId ACL_PRINCIPAL = new EntityId(61L);
+    public static final EntityId ACL_TARGET = new EntityId(62L);
+    public static final EntityId ACL_EFFECT = new EntityId(63L);
+    public static final EntityId ACL_PERMISSION = new EntityId(64L);
+    public static final EntityId PROPAGATION_PREDICATE = new EntityId(65L);
+    public static final EntityId PROPAGATION_DIRECTION = new EntityId(66L);
+    public static final EntityId PROPAGATION_PERMISSION = new EntityId(67L);
+    public static final EntityId HAS_INVERSE_PREDICATE = new EntityId(68L);
+    public static final EntityId HAS_SUPER_PREDICATE = new EntityId(69L);
+
     private BootstrapIds() {
     }
 
