@@ -20,7 +20,7 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 | [`veg-engine-persistent`](veg-engine-persistent) | Disk-Persistenz auf Engine C: `CRC32C`-WAL, atomare Refs, GZIP-Checkpoints, Kaltarchiv & Crash-Recovery |
 | [`veg-test-fixtures`](veg-test-fixtures) | Backend-agnostische Contract-Tests (`T01`–`T04`) und deterministischer Graph-Generator (`P-02`) |
 | [`veg-benchmarks`](veg-benchmarks) | Reproduzierbarer Benchmark-Harness mit CSV-/JSON-Export & JVM-Telemetrie |
-| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `benchmark`, `assertion-experiment`) |
+| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `import-rdf`, `import-project-docs`, `db`, `mcp`, `studio`, Benchmarks) |
 | [`docs`](docs) | Konzept, Glossar, Invarianten, Architektur, ADRs, Laborbuch (`RESEARCH_LOG.md`) & Experimente |
 
 ---
@@ -70,6 +70,26 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
   --entities 2000 --commits 50 --branches 500 --seed 42 `
   --output docs/experiments/stage7-storage-comparison/results.csv `
   --json docs/experiments/stage7-storage-comparison/results.json
+```
+
+### Coding-Agent-Zugriff, Wissensgraph & VEG Access Studio
+
+Die Projektdokumentation (`README.md`, `docs/*.md`, `docs/adr/*.md`) lässt sich direkt in eine persistente VEG-Datenbank überführen und über **CLI**, **MCP (Stdio JSON-RPC 2.0)** oder **VEG Access Studio** (MS-Access-inspirierter Schema-, Datenblatt- und Abfrage-Browser) erkunden und bearbeiten:
+
+```powershell
+# 1. Projekt-Markdowns als versionierten Wissensgraph nach data/project-kb überführen
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar import-project-docs --db data/project-kb --docs-root . --clean
+
+# 2. Direktabfragen per CLI (Schema, Datenblatt, GraphQueryDsl, Entity-Detail)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb schema
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb datasheet --type Invariant --search WAL
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb query --dsl 'MATCH (a:ArchitectureDecision) JOIN (a)-[addressesInvariant]->(i:Invariant) WHERE i.id = "I-17" SELECT a.id, a.title, i.id'
+
+# 3. MCP-Stdio-Server für Coding-Agents (konfiguriert in .agents/plugins/veg-mcp/mcp_config.json & .agents/skills/veg-database/SKILL.md)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar mcp --db data/project-kb
+
+# 4. VEG Access Studio (grafische Browser-Oberfläche unter http://127.0.0.1:8080/studio/index.html)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar studio --db data/project-kb --port 8080
 ```
 
 ---

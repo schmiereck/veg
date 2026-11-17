@@ -1,0 +1,4 @@
+{
+  "name": "veg-mcp",
+  "description": "Model Context Protocol server exposing the VEG Persistent Versioned Entity Graph database to coding agents."
+}

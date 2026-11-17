@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VEG Access Studio</title>
+  <link rel="stylesheet" href="/studio/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Ribbon / Context Toolbar -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-badge">VEG</span>
+        <div>
+          <div class="brand-title">Access Studio</div>
+          <div class="brand-sub" id="dbStatsLine">Schema &amp; Versioned Entity Graph Browser</div>
+        </div>
+      </div>
+
+      <nav class="view-tabs" role="tablist">
+        <button class="tab-btn active" data-view="datasheet">Datenblatt</button>
+        <button class="tab-btn" data-view="schema">Beziehungen &amp; Schema</button>
+        <button class="tab-btn" data-view="query">Abfrage-Assistent</button>
+        <button class="tab-btn" data-view="history">Historie &amp; Diff</button>
+      </nav>
+
+      <div class="context-bar">
+        <label class="ctx-field">
+          <span>Branch</span>
+          <select id="branchSelect"></select>
+        </label>
+        <label class="ctx-field">
+          <span>Zeitreise (asOf)</span>
+          <select id="asOfSelect">
+            <option value="">HEAD (Live)</option>
+          </select>
+        </label>
+        <label class="ctx-field">
+          <span>Akteur</span>
+          <input id="actorInput" type="text" value="studio-user" size="10" />
+        </label>
+        <button class="btn btn-secondary" id="refreshBtn" title="Neu laden">Aktualisieren</button>
+      </div>
+    </header>
+
+    <div class="historical-banner hidden" id="historicalBanner">
+      <span>Zeitreise aktiv: schreibgeschützte Ansicht auf Commit <strong id="historicalCommitLabel"></strong>.</span>
+      <button class="btn btn-sm btn-primary" id="exitTimeTravelBtn">Zurück zu HEAD (Live)</button>
+    </div>
+
+    <!-- Main Access Workspace -->
+    <div class="workspace">
+      <!-- Left Navigation Pane: Objektkatalog -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <strong>Objektkatalog</strong>
+          <input id="catalogFilterInput" type="search" placeholder="Katalog filtern..." />
+        </div>
+        <div class="sidebar-scroll">
+          <div class="catalog-section">
+            <div class="catalog-title">Objekttypen (Tabellen)</div>
+            <ul class="catalog-list" id="objectTypesList"></ul>
+          </div>
+          <div class="catalog-section">
+            <div class="catalog-title">Werttypen (Domänen)</div>
+            <ul class="catalog-list" id="valueTypesList"></ul>
+          </div>
+          <div class="catalog-section">
+            <div class="catalog-title">Prädikate</div>
+            <ul class="catalog-list compact" id="predicatesList"></ul>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center & Right Main Area -->
+      <main class="main-pane">
+        <!-- VIEW 1: MS-Access Datasheet + Subdatasheet -->
+        <section class="view-panel active" id="view-datasheet">
+          <div class="datasheet-toolbar">
+            <div class="datasheet-heading">
+              <h2 id="activeTypeTitle">Bitte Objekttyp wählen</h2>
+              <span class="pill" id="activeTypeMeta"></span>
+            </div>
+            <div class="datasheet-actions">
+              <input id="globalSearchInput" type="search" placeholder="Volltextfilter über alle Spalten..." />
+              <button class="btn btn-secondary" id="clearFiltersBtn">Filter leeren</button>
+              <button class="btn btn-primary" id="newRecordBtn">+ Neuer Datensatz</button>
+            </div>
+          </div>
+
+          <div class="split-pane">
+            <div class="grid-container">
+              <table class="datasheet-table" id="datasheetTable">
+                <thead id="datasheetHead"></thead>
+                <tbody id="datasheetBody"></tbody>
+              </table>
+              <div class="pagination-bar" id="paginationBar"></div>
+            </div>
+
+            <!-- Master-Detail / Subdatasheet Drawer -->
+            <aside class="detail-drawer" id="detailDrawer">
+              <div class="drawer-empty" id="drawerEmpty">
+                Wählen Sie eine Zeile im Datenblatt aus, um Attribute, ausgehende/eingehende Relationen und die Commit-Historie anzuzeigen.
+              </div>
+              <div class="drawer-content hidden" id="drawerContent"></div>
+            </aside>
+          </div>
+        </section>
+
+        <!-- VIEW 2: Schema & Relationships -->
+        <section class="view-panel" id="view-schema">
+          <div class="schema-layout">
+            <div class="card schema-diagram-card">
+              <div class="card-header">
+                <h3>Beziehungsmodell (Access-Schemaansicht)</h3>
+                <span class="muted">Klicken Sie auf eine Tabelle, um deren Datenblatt zu öffnen</span>
+              </div>
+              <div class="diagram-wrap" id="schemaDiagram"></div>
+            </div>
+
+            <div class="schema-forms-grid">
+              <form class="card form-card" id="createObjectTypeForm">
+                <h4>+ Neuer Objekttyp</h4>
+                <label>Name <input name="name" required placeholder="z. B. BenchmarkRun" /></label>
+                <button class="btn btn-primary" type="submit">Objekttyp anlegen</button>
+              </form>
+
+              <form class="card form-card" id="createValueTypeForm">
+                <h4>+ Neuer Werttyp</h4>
+                <label>Name <input name="name" required placeholder="z. B. ScoreValue" /></label>
+                <label>Skalartyp
+                  <select name="scalarType">
+                    <option value="STRING">STRING</option>
+                    <option value="INT">INT</option>
+                    <option value="DECIMAL">DECIMAL</option>
+                    <option value="BOOLEAN">BOOLEAN</option>
+                    <option value="TIMESTAMP">TIMESTAMP</option>
+                  </select>
+                </label>
+                <label class="checkbox-inline"><input type="checkbox" name="uniqueValues" /> Eindeutige Werte erzwingen</label>
+                <button class="btn btn-primary" type="submit">Werttyp anlegen</button>
+              </form>
+
+              <form class="card form-card" id="createPredicateForm">
+                <h4>+ Neues Prädikat (Attribut / Relation)</h4>
+                <label>Name <input name="name" required placeholder="z. B. reviewedBy" /></label>
+                <div class="form-row-2">
+                  <label>Domain <select name="domain" id="predDomainSelect"></select></label>
+                  <label>Range <select name="range" id="predRangeSelect"></select></label>
+                </div>
+                <div class="form-row-2">
+                  <label>Max Outgoing (leer = n) <input name="maxOutgoing" type="number" min="1" placeholder="1" /></label>
+                  <label>Max Incoming (leer = n) <input name="maxIncoming" type="number" min="1" /></label>
+                </div>
+                <label class="checkbox-inline"><input type="checkbox" name="uniqueTriple" checked /> Keine doppelten Triples (uniqueTriple)</label>
+                <button class="btn btn-primary" type="submit">Prädikat anlegen</button>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 3: Query Assistant & GraphQueryDsl -->
+        <section class="view-panel" id="view-query">
+          <div class="query-layout">
+            <div class="card query-builder-card">
+              <div class="card-header">
+                <h3>Visueller Abfrage-Assistent &rarr; GraphQueryDsl</h3>
+                <div class="preset-row" id="queryPresets"></div>
+              </div>
+              <div class="builder-grid">
+                <label>MATCH Typ (a)
+                  <select id="qbMatchType"></select>
+                </label>
+                <label>JOIN Prädikat (optional)
+                  <select id="qbJoinPred"><option value="">-- Kein Join --</option></select>
+                </label>
+                <label>Zieltyp (b, optional)
+                  <select id="qbJoinTarget"><option value="">-- Beliebig --</option></select>
+                </label>
+                <label>WHERE Attribut
+                  <input id="qbWhereField" placeholder="a.id oder a.summary" />
+                </label>
+                <label>Operator
+                  <select id="qbWhereOp">
+                    <option value="=">=</option>
+                    <option value="CONTAINS">CONTAINS</option>
+                    <option value="STARTS_WITH">STARTS_WITH</option>
+                    <option value="!=">!=</option>
+                    <option value="&gt;">&gt;</option>
+                    <option value="&lt;">&lt;</option>
+                  </select>
+                </label>
+                <label>Wert
+                  <input id="qbWhereVal" placeholder='z. B. WAL oder "I-17"' />
+                </label>
+                <label>SELECT Projektion
+                  <input id="qbSelect" placeholder="a.id, a.title" />
+                </label>
+                <label>LIMIT
+                  <input id="qbLimit" type="number" min="1" value="50" />
+                </label>
+                <div class="builder-btn-wrap">
+                  <button class="btn btn-secondary" type="button" id="applyBuilderBtn">DSL erzeugen</button>
+                </div>
+              </div>
+              <div class="dsl-editor-wrap">
+                <textarea id="dslTextarea" rows="4" spellcheck="false">MATCH (inv:Invariant)
+SELECT inv.id, inv.title, inv.category
+ORDER BY inv.id ASC
+LIMIT 30</textarea>
+                <div class="dsl-actions">
+                  <button class="btn btn-primary" id="runQueryBtn">Abfrage ausführen (Strg+Enter)</button>
+                  <span class="muted" id="queryResultStats"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card query-results-card">
+              <div class="grid-container">
+                <table class="datasheet-table" id="queryResultTable"></table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- VIEW 4: History & Diff -->
+        <section class="view-panel" id="view-history">
+          <div class="history-layout">
+            <div class="card">
+              <div class="card-header">
+                <h3>Commit-Historie (DAG)</h3>
+              </div>
+              <div class="grid-container">
+                <table class="datasheet-table" id="historyTable">
+                  <thead>
+                    <tr>
+                      <th>Commit</th>
+                      <th>Branch</th>
+                      <th>Kategorie</th>
+                      <th>Akteur</th>
+                      <th>Begründung</th>
+                      <th>Zeitpunkt</th>
+                      <th>Änderungen</th>
+                      <th>Aktion</th>
+                    </tr>
+                  </thead>
+                  <tbody id="historyBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>Commit-Diff vergleichen</h3>
+                <div class="diff-controls">
+                  <label>Von <select id="diffFromSelect"></select></label>
+                  <label>Nach <select id="diffToSelect"></select></label>
+                  <button class="btn btn-primary" id="runDiffBtn">Diff anzeigen</button>
+                </div>
+              </div>
+              <div id="diffOutput" class="diff-output muted">Wählen Sie zwei Commits für den Strukturvergleich.</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Modal for "+ Neuer Datensatz" -->
+  <dialog id="newRecordDialog" class="studio-dialog">
+    <form method="dialog" id="newRecordForm">
+      <h3 id="newRecordDialogTitle">Neuer Datensatz</h3>
+      <div id="newRecordFields" class="dialog-fields"></div>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="button" id="cancelNewRecordBtn">Abbrechen</button>
+        <button class="btn btn-primary" type="submit">Commit &amp; Anlegen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toastArea" class="toast-area"></div>
+
+  <script src="/studio/app.js"></script>
+</body>
+</html>

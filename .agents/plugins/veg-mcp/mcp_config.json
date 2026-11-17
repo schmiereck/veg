@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "veg-project-kb": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar",
+        "mcp",
+        "--db",
+        "data/project-kb"
+      ]
+    }
+  }
+}

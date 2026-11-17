@@ -96,6 +96,10 @@ public final class VegCliMain {
             case "benchmark" -> runBenchmark(args, out, err);
             case "assertion-experiment" -> runAssertionExperiment(args, out, err);
             case "storage-experiment" -> runStorageExperiment(args, out, err);
+            case "import-project-docs" -> VegWorkspaceCommands.runImportProjectDocs(args, out, err);
+            case "db" -> VegWorkspaceCommands.runDb(args, out, err);
+            case "mcp" -> VegWorkspaceCommands.runMcp(args, System.in, out, err);
+            case "studio" -> VegWorkspaceCommands.runStudio(args, out, err);
             case "-h", "--help", "help" -> {
                 printUsage(out);
                 yield 0;
@@ -790,6 +794,10 @@ public final class VegCliMain {
         out.println("Usage:");
         out.println("  veg-cli demo");
         out.println("  veg-cli import-rdf --input <file.ttl|.nt> [--format turtle|ntriples] [--query \"<DSL>\"] [--export <out.ttl>]");
+        out.println("  veg-cli import-project-docs [--db data/project-kb] [--docs-root .] [--clean]");
+        out.println("  veg-cli db --db <dir> <schema|datasheet|query|inspect|commits|set-attr|create-object|connect|disconnect> [...]");
+        out.println("  veg-cli mcp [--db data/project-kb]");
+        out.println("  veg-cli studio [--db data/project-kb] [--port 8080]");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli assertion-experiment [--pairs N] [--seed S] [--densities 1,2,5] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli storage-experiment [--entities N] [--commits C] [--branches B] [--seed S] [--warmup W] [--queries Q] [--output results.csv] [--json results.json]");
