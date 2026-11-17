@@ -5,9 +5,12 @@
 ```mermaid
 flowchart LR
     CLI["veg-cli"] --> BENCH["veg-benchmarks"]
-    BENCH --> MEM["veg-engine-memory (Engine A)"]
+    CLI --> PERS["veg-engine-persistent"]
+    BENCH --> MEM["veg-engine-memory (Engine A/B/C)"]
+    PERS --> MEM
+    PERS --> API["veg-engine-api"]
     BENCH --> FIX["veg-test-fixtures"]
-    MEM --> API["veg-engine-api"]
+    MEM --> API
     FIX --> API
     API --> MODEL["veg-model"]
 ```
@@ -93,3 +96,11 @@ Durch [CommitPublicationTarget](file:///C:/Users/thomas/Projekte/veg/veg-engine-
 1. **Engine A (`InMemoryVersionedDatabase` / `InMemoryGraphSnapshot`):** Naiver `HashMap`/`ArrayList`-Snapshot pro Commit (Baseline).
 2. **Engine B (`CompactVersionedDatabase` / `CompactGraphSnapshot` / `ValueInterner`):** Sortierte primitive `long[]`-/CSR-Arrays (`snapshotInterval = 1`) bzw. Journal + periodische Checkpoints (`snapshotInterval > 1`) plus legales Interning unveränderlicher `Value`-Payloads.
 3. **Engine C (`PersistentTreeVersionedDatabase` / `PersistentGraphSnapshot` / `PersistentLongMap`):** Strukturell geteilte 32-Wege-Bit-Partitionierte Radix-Tries mit reinem Pfadkopieren (`O(log32 N)`) pro Commit. Siehe [ADR-0008](adr/0008-storage-engine-comparison-and-persistent-tree-selection.md).
+
+## Stufe-8-Persistenzschicht (`veg-engine-persistent`)
+
+`PersistentDiskVersionedDatabase` verknüpft Engine C (`PersistentTreeVersionedDatabase`) über `PersistenceObserver`-Hooks und `coldSnapshotLoader` mit dauerhafter Disk-Speicherung (`dataDir/`):
+
+- `BinaryGraphCodec` — Deterministische Binärkodierung (ohne 64-KB-UTF8-Limit, volle Nanosekunden-/Scale-Präzision für `Instant`/`BigDecimal`) inklusive `CRC32C`-Envelope und GZIP-Kompression.
+- `WriteAheadLogStore` — Geframetes Append-Only WAL (`wal.log`) mit Tail-Trailer (`0x454E4443`), `FSYNC_EVERY_COMMIT`/`FLUSH_OS_BUFFER`, automatischem Tail-Truncate (`T17`) und strikter Erkennung innerer Korruption (`StorageCorruptionException`, `P-08`).
+- `CheckpointAndArchiveStore` — Atomare `.tmp`-Schreibpfade für `refs.meta`, `checkpoints/ckpt-*.bin.gz`, `archive/segment-*.wal.gz`, Tempfile-Bereinigung sowie `backupTo`/`restoreFrom`. Siehe [ADR-0009](adr/0009-persistent-wal-checkpoints-and-crash-recovery.md).

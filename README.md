@@ -16,7 +16,8 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 |---|---|
 | [`veg-model`](veg-model) | Unveränderliche Kernprimitiven (`EntityId`, `Value`, `EntityNode`, `Edge`, `BootstrapIds`) |
 | [`veg-engine-api`](veg-engine-api) | Storage-unabhängige Schnittstellen (`GraphReader`, `GraphSession`) & typisierte Exceptions (`P-01`) |
-| [`veg-engine-memory`](veg-engine-memory) | Referenz-Engine **A** (In-Memory Maps) mit strenger atomarer Typ- und Constraint-Prüfung |
+| [`veg-engine-memory`](veg-engine-memory) | In-Memory Engines **A** (`HashMap`), **B** (kompaktes CSR + Checkpoints) & **C** (Persistent Radix-32 Trie) |
+| [`veg-engine-persistent`](veg-engine-persistent) | Disk-Persistenz auf Engine C: `CRC32C`-WAL, atomare Refs, GZIP-Checkpoints, Kaltarchiv & Crash-Recovery |
 | [`veg-test-fixtures`](veg-test-fixtures) | Backend-agnostische Contract-Tests (`T01`–`T04`) und deterministischer Graph-Generator (`P-02`) |
 | [`veg-benchmarks`](veg-benchmarks) | Reproduzierbarer Benchmark-Harness mit CSV-/JSON-Export & JVM-Telemetrie |
 | [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `benchmark`, `assertion-experiment`) |
@@ -45,7 +46,7 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 # Paketieren des ausführbaren CLI-JARs
 .\mvnw.cmd -q package -DskipTests
 
-# Stage-1..6-Demonstration (Graph-Schema, Replay, Branches/Merge, ACLs, LUBM/BSBM Queries & RDF-Export)
+# Stage-1..8-Demonstration (Graph-Schema, Replay, Merge, ACLs, LUBM/BSBM Queries, Engine A/B/C & Disk-Recovery T17)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo
 
 # Externe Turtle-/N-Triples-Datei importieren, abfragen und re-exportieren
@@ -83,7 +84,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
 - [x] **Stufe 5:** Versionsbewusste Berechtigungen ("Verbieten gewinnt", Entity/Relation/Attribut, `S-01`–`S-03`, `S-05`, `T13`–`T14`) & abgeleitete Aussagen (`M-12`, `ADR-0006`)
 - [x] **Stufe 6:** Storage-unabhängige Query-API/DSL (`S-04`), RDF/Turtle-Import & -Export (`T18`, `S-06`, `ADR-0007`) sowie LUBM/BSBM-Datensätze
 - [x] **Stufe 7:** Storage-Experimente & Benchmarks (**Engine A** Map vs. **Engine B1/B2** CSR/Checkpoints vs. **Engine C** Persistent Radix-32 Trie, `W1`–`W7`, `ADR-0008`)
-- [ ] **Stufe 8:** Native Disk-Persistenz, WAL/Commit-Log, Snapshots & Crash-Recovery (`T17`)
+- [x] **Stufe 8:** Native Disk-Persistenz, WAL/Commit-Log, Checkpoints, Kaltarchiv, Backup/Restore & Crash-Recovery (`P-06`–`P-08`, `T17`, `ADR-0009`)
 - [ ] **Stufe 10:** Reifung zur Mehrbenutzer-Datenbank (MVCC, Auto-Indizes, Bitemporalität)
 - [ ] **Stufe 9 *(Option / P3)*:** Optionaler Enterprise-/Oracle-CDC-/Outbox-Adapter
 
@@ -102,6 +103,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
 - [ADR-0006: Graph-Basierte Zugriffskontrolle ("Verbieten gewinnt") & Semantische Prädikat-Inferenz](docs/adr/0006-access-control-deny-wins-and-semantic-inference.md)
 - [ADR-0007: Storage-unabhängige Query-API/DSL & RDF/Turtle-Interoperabilität](docs/adr/0007-query-dsl-and-rdf-turtle-interoperability.md)
 - [ADR-0008: Storage-Engine-Vergleich & Wahl von Engine C (Persistent Radix-32 Trie)](docs/adr/0008-storage-engine-comparison-and-persistent-tree-selection.md)
+- [ADR-0009: Persistentes WAL, komprimierte Checkpoints, Kaltarchivierung & Crash-Recovery](docs/adr/0009-persistent-wal-checkpoints-and-crash-recovery.md)
 - [Stage-7 Storage-Experiment-Auswertung](docs/experiments/stage7-storage-comparison/analysis.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 

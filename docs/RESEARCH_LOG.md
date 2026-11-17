@@ -325,3 +325,50 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 8):**  
   Native Disk-Persistenz (`veg-engine-persistent` oder persistenter Journal-/Checkpoint-Speicher auf Basis von Engine C) mit binärem Append-Only WAL, Prüfsummen, Neustart-Rekonstruktion und Crash-Injection (`T17`, `P-06`, `P-08`).
+
+---
+
+## Eintrag 08 — Stufe 8: Persistentes WAL, GZIP-Checkpoints, Kaltarchivierung & Crash-Recovery (`T17`)
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 8** (`P-06`, `P-07`, `P-08`, `T17`):  
+  1. Engine C (`PersistentTreeVersionedDatabase`) lässt sich über `PersistenceObserver`-Hooks und einen on-demand `coldSnapshotLoader` mit einem `CRC32C`-gesicherten Append-Only WAL (`wal.log`), atomar ersetzter `refs.meta` und GZIP-Checkpoints (`checkpoints/ckpt-*.bin.gz`) zu einer crash-festen Disk-Engine (`PersistentDiskVersionedDatabase`) ausbauen, die alle `Stage1`–`Stage6`-Vertragstests (`88` Tests) exakt besteht.  
+  2. Kaltarchivierung (`archiveHistoryBefore`) kompaktiert `wal.log` und entlastet den Heap durch Eviktion alter Snapshots in komprimierte `archive/segment-*.wal.gz`-Segmente, ohne `asOf`, `diff` oder `replayAsOf` auf archivierte Commits zu beschädigen (`P-07`).
+
+- **Implementiert:**  
+  - `veg-engine-memory`: Erweiterung von `PersistentGraphSnapshot` (`emptySnapshot`, `fromMaterialized`, `applyDelta`) und `PersistentTreeVersionedDatabase` (`createRecovered`, `PersistenceObserver`, `coldSnapshotLoader`, `findHotSnapshot`, `evictHotSnapshot`, `branchReadRestrictionsSnapshot`, `currentNextEntityId`).
+  - `veg-engine-persistent` (`io.veg.engine.persistent`): `DurabilityMode`, `CrashPoint`, `SimulatedCrashException`, `StorageCorruptionException`, `RecoveryReport`, `BinaryGraphCodec`, `WriteAheadLogStore`, `CheckpointAndArchiveStore`, `PersistentDiskVersionedDatabase` (inkl. `backupTo`/`restoreFrom` und LRU-Kaltcache).
+  - Tests in `veg-engine-persistent`: `PersistentDiskContractTest` (`Stage1`–`Stage6` = **88 Tests**) sowie `Stage8PersistenceAndRecoveryTest` (**10 Tests** für `P-06`–`P-08` & `T17`).
+  - `veg-cli`: `runStage8Demo` in `VegCliMain` + Assertion-Erweiterung in `VegCliMainTest`.
+  - Dokumentation: [ADR-0009](adr/0009-persistent-wal-checkpoints-and-crash-recovery.md), [INVARIANTS.md](INVARIANTS.md) (`I-23`, `I-24`), [ARCHITECTURE.md](ARCHITECTURE.md), [CONCEPT.md](CONCEPT.md), [README.md](../README.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **475 / 475 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 19 / 19 bestanden
+  - `veg-engine-memory`: 350 / 350 bestanden
+  - `veg-engine-persistent`: **98 / 98** bestanden (`PersistentDiskContractTest` 88 + `Stage8PersistenceAndRecoveryTest` 10)
+  - `veg-benchmarks`: 3 / 3 bestanden
+  - `veg-cli`: 5 / 5 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  - `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo`: Exit-Code 0 (`VEG Stage 8 ... T17 simulated crash mid-WAL -> MID_WAL_FRAME_WRITE`, `Recovered from checkpoint=c3, replayedWalCommits=2, truncatedTailFrames=1, coldArchiveSegments=1, headMatchesPreCrash=true`).
+  - Geprüfte Fehlerszenarien (`Stage8PersistenceAndRecoveryTest`):
+    - Neustart nach Multi-Branch-Merge, allen 6 `ValueType`-Varianten, Tags & Branch-ACLs inkl. kollisionsfreier `EntityId`-Fortsetzung (`p06AndP08_cleanRestartReconstructsMultiBranchEntitiesEdgesValuesTagsAndAcls`).
+    - Checkpoints alle 10 Commits reduzieren `replayedWalCommits < 26` beim Neustart (`p06_periodicCheckpointsAccelerateRestartReplay`).
+    - Deterministische `T17`-Crash-Injektion an `MID_WAL_FRAME_WRITE`, `CORRUPTED_WAL_TAIL_CRC`, `AFTER_WAL_BEFORE_REFS_UPDATE` und `MID_CHECKPOINT_WRITE` bereinigt beschädigte Tails/Temp-Dateien bzw. zieht unindizierte WAL-Commits sauber auf den Ziel-Branch nach.
+    - Bit-Flips in inneren WAL-Frames, Checkpoint-Dateien, Kaltarchiv-Segmenten oder `refs.meta` werfen zuverlässig `StorageCorruptionException` (`P-08`).
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt (`P-06`–`P-08`, `T17`):** Die Trennung zwischen unveränderlicher Radix-32-Snapshot-Struktur im Speicher und binärem Append-Only WAL + `CRC32C`-Checkpoints + komprimiertem Kaltarchiv auf Disk bewahrt exakt dieselbe Transaktions-, ACL-, Query- und RDF-Semantik wie Engine A/B/C bei voller Crash-Sicherheit.
+  - **Wichtiges Detail beim Restart-Allokator:** `refs.meta` plus Scan des maximalen `EntityId`-Zählers aus rehydrierten Commits/Snapshots verhindert nach einem Neustart ID-Kollisionen ab `1000` (auch wenn vor dem Crash nach `AFTER_WAL_BEFORE_REFS_UPDATE` `refs.meta` zurücklag).
+
+- **Risiken und technische Schulden:**  
+  1. `PersistentDiskVersionedDatabase` hält die Commit-Metadaten-Liste (`commits`) und jüngere Hot-Radix-Tries weiterhin im JVM-Heap (historische Snapshots `< cutoffCommitId` werden bei `archiveHistoryBefore` in `archive/` + LRU-Cache ausgelagert); echtes Out-of-Core-Paging einzelner Radix-Trie-Knoten bei Multi-Millionen-Hot-Sets sowie Multi-Writer-MVCC bleiben für Stufe 10.
+  2. Synchronisierung erfolgt aktuell über Objekt-Monitore (`synchronized`) auf Schreibpfaden; parallele Reader + MVCC folgen in Stufe 10.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** zu Stufe 10 (Reifung zur Mehrbenutzer-/Produktions-Engine: MVCC/Parallelität, automatische Index-Wahl, Bitemporalität; optionaler Oracle-CDC-Adapter als P3).
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 10):**  
+  Implementierung von MVCC-Snapshot-Isolation für konkurrierende Reader und parallele Transaktionen auf Basis der `PersistentTreeVersionedDatabase` / `PersistentDiskVersionedDatabase`-Struktur sowie gezielter Reachability-/Prädikat-Indizes zur Senkung der `W3` 5-Hop+ACL-Latenz.

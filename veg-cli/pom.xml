@@ -21,6 +21,10 @@
         </dependency>
         <dependency>
             <groupId>io.veg</groupId>
+            <artifactId>veg-engine-persistent</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.veg</groupId>
             <artifactId>veg-test-fixtures</artifactId>
         </dependency>
         <dependency>

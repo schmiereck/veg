@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Engine C: structurally shared persistent radix-32 tree storage engine ({@code P-04}, {@code H3}).
@@ -47,7 +48,28 @@ import java.util.function.Consumer;
  */
 public final class PersistentTreeVersionedDatabase implements VersionedGraphDatabase, CommitPublicationTarget {
 
-    private final AtomicLong sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
+    /**
+     * Hook invoked on metadata and commit mutations so disk-backed wrappers can persist WAL frames,
+     * branch pointers, tags, and checkpoints atomically.
+     */
+    public interface PersistenceObserver {
+        default void onCommitAppended(Commit commit, PersistentGraphSnapshot snapshot) {
+        }
+
+        default void onBranchCreated(Branch branch) {
+        }
+
+        default void onBranchCheckedOut(String branchName) {
+        }
+
+        default void onTagCreated(Tag tag) {
+        }
+
+        default void onBranchReadRestricted(String branchName, Set<String> allowedPrincipalIds) {
+        }
+    }
+
+    private final AtomicLong sharedUserEntityIdAllocator;
     private final ValueInterner valueInterner = new ValueInterner();
     private final List<Commit> commits = new ArrayList<>();
     private final Map<CommitId, PersistentGraphSnapshot> snapshots = new HashMap<>();
@@ -56,8 +78,11 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     private final Map<String, Set<String>> branchReadRestrictions = new HashMap<>();
 
     private String activeBranch = DEFAULT_BRANCH;
+    private PersistenceObserver persistenceObserver;
+    private Function<CommitId, PersistentGraphSnapshot> coldSnapshotLoader;
 
     public PersistentTreeVersionedDatabase() {
+        this.sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
         MutableGraphState initialState = new MutableGraphState(sharedUserEntityIdAllocator);
         List<Change> bootstrapChanges = new ArrayList<>();
         BootstrapKernelInitializer.initialize(initialState, bootstrapChanges);
@@ -80,6 +105,82 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         branches.put(DEFAULT_BRANCH, new Branch(DEFAULT_BRANCH, CommitId.BOOTSTRAP));
     }
 
+    private PersistentTreeVersionedDatabase(long nextEntityId) {
+        this.sharedUserEntityIdAllocator = new AtomicLong(nextEntityId);
+    }
+
+    /**
+     * Constructs a {@link PersistentTreeVersionedDatabase} from recovered disk state (commits, hot snapshots,
+     * branches, tags, branch ACL restrictions, active branch, and entity ID allocator state).
+     */
+    public static PersistentTreeVersionedDatabase createRecovered(
+            List<Commit> recoveredCommits,
+            Map<CommitId, PersistentGraphSnapshot> recoveredHotSnapshots,
+            Map<String, Branch> recoveredBranches,
+            Map<String, Tag> recoveredTags,
+            Map<String, Set<String>> recoveredRestrictions,
+            String activeBranchName,
+            long nextUserEntityId
+    ) {
+        Objects.requireNonNull(recoveredCommits, "recoveredCommits must not be null");
+        Objects.requireNonNull(recoveredHotSnapshots, "recoveredHotSnapshots must not be null");
+        Objects.requireNonNull(recoveredBranches, "recoveredBranches must not be null");
+        Objects.requireNonNull(recoveredTags, "recoveredTags must not be null");
+        Objects.requireNonNull(recoveredRestrictions, "recoveredRestrictions must not be null");
+        Objects.requireNonNull(activeBranchName, "activeBranchName must not be null");
+
+        PersistentTreeVersionedDatabase db = new PersistentTreeVersionedDatabase(
+                Math.max(EntityId.USER_MIN_ID, nextUserEntityId));
+        db.commits.addAll(recoveredCommits);
+        db.snapshots.putAll(recoveredHotSnapshots);
+        db.branches.putAll(recoveredBranches);
+        db.tags.putAll(recoveredTags);
+        for (var entry : recoveredRestrictions.entrySet()) {
+            db.branchReadRestrictions.put(entry.getKey(), Set.copyOf(entry.getValue()));
+        }
+        db.activeBranch = activeBranchName;
+        return db;
+    }
+
+    public void setPersistenceObserver(PersistenceObserver observer) {
+        this.persistenceObserver = observer;
+    }
+
+    public void setColdSnapshotLoader(Function<CommitId, PersistentGraphSnapshot> coldSnapshotLoader) {
+        this.coldSnapshotLoader = coldSnapshotLoader;
+    }
+
+    public PersistentGraphSnapshot snapshotForCommit(CommitId commitId) {
+        Objects.requireNonNull(commitId, "commitId must not be null");
+        return resolveSnapshot(commitId);
+    }
+
+    public Optional<PersistentGraphSnapshot> findHotSnapshot(CommitId commitId) {
+        Objects.requireNonNull(commitId, "commitId must not be null");
+        return Optional.ofNullable(snapshots.get(commitId));
+    }
+
+    public boolean evictHotSnapshot(CommitId commitId) {
+        Objects.requireNonNull(commitId, "commitId must not be null");
+        return snapshots.remove(commitId) != null;
+    }
+
+    public int hotSnapshotCount() {
+        return snapshots.size();
+    }
+
+    public Map<String, Set<String>> branchReadRestrictionsSnapshot() {
+        Map<String, Set<String>> copy = new LinkedHashMap<>();
+        for (var entry : branchReadRestrictions.entrySet()) {
+            copy.put(entry.getKey(), Set.copyOf(entry.getValue()));
+        }
+        return copy;
+    }
+
+    public long currentNextEntityId() {
+        return sharedUserEntityIdAllocator.get();
+    }
+
     public int countTotalUniqueTrieNodesAcrossAllCommits() {
         Set<Object> seenNodes = Collections.newSetFromMap(new IdentityHashMap<>());
         for (PersistentGraphSnapshot snapshot : snapshots.values()) {
@@ -97,6 +198,9 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     public void checkoutBranch(String branchName) {
         requireBranch(branchName);
         this.activeBranch = branchName;
+        if (persistenceObserver != null) {
+            persistenceObserver.onBranchCheckedOut(branchName);
+        }
     }
 
     @Override
@@ -106,7 +210,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
 
     @Override
     public GraphReader currentSnapshot() {
-        return snapshots.get(headCommitId());
+        return resolveSnapshot(headCommitId());
     }
 
     @Override
@@ -122,6 +226,9 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         getCommit(fromCommitId);
         Branch branch = new Branch(branchName, fromCommitId);
         branches.put(branchName, branch);
+        if (persistenceObserver != null) {
+            persistenceObserver.onBranchCreated(branch);
+        }
         return branch;
     }
 
@@ -142,7 +249,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
 
     @Override
     public GraphReader branchSnapshot(String branchName) {
-        return snapshots.get(branchHead(branchName));
+        return resolveSnapshot(branchHead(branchName));
     }
 
     @Override
@@ -158,6 +265,9 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         getCommit(commitId);
         Tag tag = new Tag(tagName, commitId);
         tags.put(tagName, tag);
+        if (persistenceObserver != null) {
+            persistenceObserver.onTagCreated(tag);
+        }
         return tag;
     }
 
@@ -184,11 +294,8 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     @Override
     public GraphReader asOf(CommitId commitId) {
         Objects.requireNonNull(commitId, "commitId must not be null");
-        PersistentGraphSnapshot snapshot = snapshots.get(commitId);
-        if (snapshot == null) {
-            throw new CommitNotFoundException("Commit not found: " + commitId);
-        }
-        return snapshot;
+        getCommit(commitId);
+        return resolveSnapshot(commitId);
     }
 
     @Override
@@ -241,7 +348,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
                 this,
                 branchName,
                 head,
-                snapshots.get(head).toMutableState(sharedUserEntityIdAllocator),
+                resolveSnapshot(head).toMutableState(sharedUserEntityIdAllocator),
                 dataCategory,
                 actor,
                 reason,
@@ -256,7 +363,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
                 this,
                 branchName,
                 head,
-                snapshots.get(head).toMutableState(sharedUserEntityIdAllocator)
+                resolveSnapshot(head).toMutableState(sharedUserEntityIdAllocator)
         );
     }
 
@@ -271,7 +378,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
             throw new RevertConflictException("Cannot revert bootstrap commit " + targetCommitId);
         }
         Commit target = getCommit(targetCommitId);
-        MutableGraphState working = snapshots.get(branchHeadId).toMutableState(sharedUserEntityIdAllocator);
+        MutableGraphState working = resolveSnapshot(branchHeadId).toMutableState(sharedUserEntityIdAllocator);
         List<Change> counterChanges = CommitReverter.revertOnto(working, target);
 
         return appendCommit(
@@ -303,7 +410,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
 
         ThreeWayMergeEngine.PreparedMerge prepared = ThreeWayMergeEngine.prepareMerge(
                 commits,
-                commitId -> snapshots.get(commitId).toMutableState(sharedUserEntityIdAllocator),
+                commitId -> resolveSnapshot(commitId).toMutableState(sharedUserEntityIdAllocator),
                 sourceHead,
                 targetHead,
                 policy
@@ -344,7 +451,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         CommitId sourceHead = branchHead(sourceBranch);
         CommitId targetHead = branchHead(targetBranch);
 
-        MutableGraphState resolvedState = snapshots.get(targetHead).toMutableState(sharedUserEntityIdAllocator);
+        MutableGraphState resolvedState = resolveSnapshot(targetHead).toMutableState(sharedUserEntityIdAllocator);
         List<Change> resolutionChanges = new ArrayList<>();
         InMemoryGraphEngine session = new InMemoryGraphEngine(resolvedState, resolutionChanges);
         conflictResolver.accept(session);
@@ -390,7 +497,11 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
                 throw new IllegalArgumentException("allowedPrincipalIds must not contain null or blank principal IDs");
             }
         }
-        branchReadRestrictions.put(branchName, Set.copyOf(allowedPrincipalIds));
+        Set<String> copied = Set.copyOf(allowedPrincipalIds);
+        branchReadRestrictions.put(branchName, copied);
+        if (persistenceObserver != null) {
+            persistenceObserver.onBranchReadRestricted(branchName, copied);
+        }
     }
 
     @Override
@@ -401,7 +512,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     @Override
     public AuthorizedGraphReader authorizedBranchSnapshot(String branchName, String principalId) {
         Branch branch = requireBranch(branchName);
-        GraphReader snapshot = snapshots.get(branch.headCommitId());
+        GraphReader snapshot = resolveSnapshot(branch.headCommitId());
         return new AuthorizedGraphReaderImpl(
                 snapshot,
                 snapshot,
@@ -414,12 +525,12 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     @Override
     public AuthorizedGraphReader authorizedAsOf(CommitId commitId, String principalId) {
         Commit commit = getCommit(commitId);
-        GraphReader historicalSnapshot = snapshots.get(commitId);
+        GraphReader historicalSnapshot = resolveSnapshot(commitId);
         String targetBranch = commit.branchName();
         Branch branchObj = branches.get(targetBranch);
         GraphReader headSnapshot = branchObj != null
-                ? snapshots.get(branchObj.headCommitId())
-                : snapshots.get(headCommitId());
+                ? resolveSnapshot(branchObj.headCommitId())
+                : resolveSnapshot(headCommitId());
         return new AuthorizedGraphReaderImpl(
                 historicalSnapshot,
                 headSnapshot,
@@ -431,7 +542,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
 
     @Override
     public MutableGraphState stateCopyForBranch(String branchName) {
-        return snapshots.get(branchHead(branchName)).toMutableState(sharedUserEntityIdAllocator);
+        return resolveSnapshot(branchHead(branchName)).toMutableState(sharedUserEntityIdAllocator);
     }
 
     @Override
@@ -488,10 +599,27 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         commits.add(commit);
         PersistentGraphSnapshot parentSnapshot = parentIds.isEmpty()
                 ? PersistentGraphSnapshot.empty()
-                : snapshots.get(parentIds.getFirst());
+                : resolveSnapshot(parentIds.getFirst());
         PersistentGraphSnapshot nextSnapshot = parentSnapshot.applyChanges(changes, valueInterner);
         snapshots.put(nextId, nextSnapshot);
         branches.put(branchName, new Branch(branchName, nextId));
+        if (persistenceObserver != null) {
+            persistenceObserver.onCommitAppended(commit, nextSnapshot);
+        }
         return nextId;
+    }
+
+    private PersistentGraphSnapshot resolveSnapshot(CommitId commitId) {
+        PersistentGraphSnapshot hot = snapshots.get(commitId);
+        if (hot != null) {
+            return hot;
+        }
+        if (coldSnapshotLoader != null && commitId.value() >= 0 && commitId.value() < commits.size()) {
+            PersistentGraphSnapshot loaded = coldSnapshotLoader.apply(commitId);
+            if (loaded != null) {
+                return loaded;
+            }
+        }
+        throw new CommitNotFoundException("Snapshot not found for commit: " + commitId);
     }
 }

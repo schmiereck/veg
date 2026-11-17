@@ -15,6 +15,7 @@ import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -76,6 +77,71 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
 
     static PersistentGraphSnapshot empty() {
         return EMPTY;
+    }
+
+    /**
+     * Returns an empty persistent snapshot instance for snapshot replay or checkpoint loading.
+     */
+    public static PersistentGraphSnapshot emptySnapshot() {
+        return EMPTY;
+    }
+
+    /**
+     * Reconstructs an immutable {@link PersistentGraphSnapshot} from materialized entity nodes and edges
+     * (e.g., when loading a persisted checkpoint from disk).
+     */
+    public static PersistentGraphSnapshot fromMaterialized(
+            Collection<EntityNode> nodes,
+            Collection<Edge> edges
+    ) {
+        Objects.requireNonNull(nodes, "nodes must not be null");
+        Objects.requireNonNull(edges, "edges must not be null");
+        PersistentLongMap<EntityNode> nextEntities = PersistentLongMap.empty();
+        PersistentLongMap<Edge> nextEdges = PersistentLongMap.empty();
+        PersistentLongMap<List<Edge>> nextOutgoing = PersistentLongMap.empty();
+        PersistentLongMap<List<Edge>> nextIncoming = PersistentLongMap.empty();
+        List<EntityId> propRules = new ArrayList<>();
+
+        for (EntityNode node : nodes) {
+            nextEntities = nextEntities.put(node.id().value(), node);
+            if (BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(node.typeId()) && !propRules.contains(node.id())) {
+                propRules.add(node.id());
+            }
+        }
+        propRules.sort(Comparator.naturalOrder());
+
+        for (Edge edge : edges) {
+            nextEntities = nextEntities.put(edge.id().value(),
+                    new EntityNode(edge.id(), BootstrapIds.META_EDGE_TYPE, EntityKind.EDGE, Optional.empty()));
+            nextEdges = nextEdges.put(edge.id().value(), edge);
+            nextOutgoing = addEdgeToAdjacency(nextOutgoing, edge.sourceId().value(), edge);
+            nextIncoming = addEdgeToAdjacency(nextIncoming, edge.targetId().value(), edge);
+        }
+
+        Map<String, EntityId> types = new HashMap<>();
+        Map<String, EntityId> predicates = new HashMap<>();
+        Map<String, EntityId> principals = new HashMap<>();
+        for (EntityNode node : nodes) {
+            indexSubjectNameIfApplicable(node, nextEntities, nextOutgoing, types, predicates, principals);
+        }
+
+        return new PersistentGraphSnapshot(
+                nextEntities,
+                nextEdges,
+                nextOutgoing,
+                nextIncoming,
+                Map.copyOf(types),
+                Map.copyOf(predicates),
+                Map.copyOf(principals),
+                List.copyOf(propRules)
+        );
+    }
+
+    /**
+     * Applies a list of committed {@link Change} deltas onto this immutable snapshot.
+     */
+    public PersistentGraphSnapshot applyDelta(List<Change> changes) {
+        return applyChanges(changes, new ValueInterner());
     }
 
     PersistentGraphSnapshot applyChanges(List<Change> changes, ValueInterner interner) {
@@ -184,21 +250,9 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                 nextPrincipals.values().removeIf(v -> v.equals(idToRemove));
 
                 EntityNode node = nextEntities.get(subjectId.value());
-                if (node == null) {
-                    continue;
-                }
-                String resolvedName = resolveNameFromMaps(nextEntities, nextOutgoing, subjectId);
-                if (resolvedName == null) {
-                    continue;
-                }
-                if (node.kind() == EntityKind.META_TYPE || node.kind() == EntityKind.SCALAR_TYPE) {
-                    if (BootstrapIds.META_PREDICATE_TYPE.equals(node.typeId())) {
-                        nextPredicates.put(resolvedName, subjectId);
-                    } else {
-                        nextTypes.put(resolvedName, subjectId);
-                    }
-                } else if (node.kind() == EntityKind.OBJECT && BootstrapIds.META_PRINCIPAL_TYPE.equals(node.typeId())) {
-                    nextPrincipals.put(resolvedName, subjectId);
+                if (node != null) {
+                    indexSubjectNameIfApplicable(
+                            node, nextEntities, nextOutgoing, nextTypes, nextPredicates, nextPrincipals);
                 }
             }
         }
@@ -435,6 +489,35 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
             return map;
         }
         return updated.isEmpty() ? map.remove(ownerKey) : map.put(ownerKey, List.copyOf(updated));
+    }
+
+    private static void indexSubjectNameIfApplicable(
+            EntityNode node,
+            PersistentLongMap<EntityNode> entities,
+            PersistentLongMap<List<Edge>> outgoingEdges,
+            Map<String, EntityId> types,
+            Map<String, EntityId> predicates,
+            Map<String, EntityId> principals
+    ) {
+        boolean schemaOrPrincipal = node.kind() == EntityKind.META_TYPE
+                || node.kind() == EntityKind.SCALAR_TYPE
+                || (node.kind() == EntityKind.OBJECT && BootstrapIds.META_PRINCIPAL_TYPE.equals(node.typeId()));
+        if (!schemaOrPrincipal) {
+            return;
+        }
+        String resolvedName = resolveNameFromMaps(entities, outgoingEdges, node.id());
+        if (resolvedName == null) {
+            return;
+        }
+        if (node.kind() == EntityKind.META_TYPE || node.kind() == EntityKind.SCALAR_TYPE) {
+            if (BootstrapIds.META_PREDICATE_TYPE.equals(node.typeId())) {
+                predicates.put(resolvedName, node.id());
+            } else {
+                types.put(resolvedName, node.id());
+            }
+        } else {
+            principals.put(resolvedName, node.id());
+        }
     }
 
     private static String resolveNameFromMaps(

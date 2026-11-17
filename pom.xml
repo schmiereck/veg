@@ -23,6 +23,7 @@
         <module>veg-model</module>
         <module>veg-engine-api</module>
         <module>veg-engine-memory</module>
+        <module>veg-engine-persistent</module>
         <module>veg-test-fixtures</module>
         <module>veg-benchmarks</module>
         <module>veg-cli</module>
@@ -56,6 +57,11 @@
             <dependency>
                 <groupId>io.veg</groupId>
                 <artifactId>veg-engine-memory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.veg</groupId>
+                <artifactId>veg-engine-persistent</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -23,6 +23,11 @@ import io.veg.engine.memory.CompactVersionedDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
 import io.veg.engine.memory.InMemoryVersionedDatabase;
 import io.veg.engine.memory.PersistentTreeVersionedDatabase;
+import io.veg.engine.persistent.CrashPoint;
+import io.veg.engine.persistent.DurabilityMode;
+import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
+import io.veg.engine.persistent.RecoveryReport;
+import io.veg.engine.persistent.SimulatedCrashException;
 import io.veg.fixtures.RdfBenchmarkDatasets;
 import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
@@ -49,13 +54,16 @@ import io.veg.model.ValueType;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 
 /**
  * CLI entry point for running Stage 1/2 demonstrations and reproducible benchmark experiments.
@@ -363,6 +371,64 @@ public final class VegCliMain {
                 + " across " + engineB.commitHistory().size() + " commits (internedValues=" + engineB.internedDistinctValueCount() + ")");
         out.println("Engine C unique persistent radix-32 trie nodes across "
                 + engineC.commitHistory().size() + " commits=" + engineC.countTotalUniqueTrieNodesAcrossAllCommits());
+
+        runStage8Demo(out);
+    }
+
+    private static void runStage8Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 8 Persistent WAL, Checkpoints, Cold Archive & Crash Recovery Demo ===");
+        Path tempRoot = null;
+        try {
+            tempRoot = Files.createTempDirectory("veg-stage8-demo");
+            CommitId headBeforeCrash;
+            EntityId sensorType;
+            try (PersistentDiskVersionedDatabase diskDb = PersistentDiskVersionedDatabase.open(
+                    tempRoot, DurabilityMode.FLUSH_OS_BUFFER, 3)) {
+                try (GraphTransaction tx = diskDb.beginTransaction(Actor.user("ops"), Reason.of("schema"))) {
+                    sensorType = tx.defineObjectType("Sensor");
+                    tx.commit();
+                }
+                for (int i = 0; i < 4; i++) {
+                    try (GraphTransaction tx = diskDb.beginTransaction(Actor.user("ops"), Reason.of("reading-" + i))) {
+                        tx.createObject(sensorType);
+                        tx.commit();
+                    }
+                }
+                headBeforeCrash = diskDb.headCommitId();
+                diskDb.archiveHistoryBefore(new CommitId(3));
+
+                diskDb.setCrashPoint(CrashPoint.MID_WAL_FRAME_WRITE);
+                try (GraphTransaction tx = diskDb.beginTransaction(Actor.user("ops"), Reason.of("torn-commit"))) {
+                    tx.createObject(sensorType);
+                    tx.commit();
+                } catch (SimulatedCrashException expected) {
+                    out.println("T17 simulated crash mid-WAL -> " + expected.crashPoint());
+                }
+            }
+
+            try (PersistentDiskVersionedDatabase recovered = PersistentDiskVersionedDatabase.open(
+                    tempRoot, DurabilityMode.FLUSH_OS_BUFFER, 3)) {
+                RecoveryReport report = recovered.lastRecoveryReport();
+                out.println("Recovered from checkpoint=" + report.loadedCheckpointId().map(CommitId::toString).orElse("none")
+                        + ", replayedWalCommits=" + report.replayedWalCommits()
+                        + ", truncatedTailFrames=" + report.truncatedTailFrames()
+                        + ", coldArchiveSegments=" + recovered.coldArchiveSegmentCount()
+                        + ", headMatchesPreCrash=" + recovered.headCommitId().equals(headBeforeCrash));
+            }
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Stage 8 demo failed", ex);
+        } finally {
+            if (tempRoot != null) {
+                try (Stream<Path> walk = Files.walk(tempRoot)) {
+                    for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) {
+                        Files.deleteIfExists(p);
+                    }
+                } catch (IOException ignored) {
+                    // Best-effort temp cleanup.
+                }
+            }
+        }
     }
 
     private static int runImportRdf(String[] args, PrintStream out, PrintStream err) throws IOException {
