@@ -1,5 +1,6 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.GraphReader;
 import io.veg.model.AccessDecision;
 import io.veg.model.AccessEffect;
 import io.veg.model.AccessReason;
@@ -26,9 +27,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Evaluates graph-based access control decisions using Default Deny and global "Deny Wins"
- * ("Verbieten gewinnt") across direct ACLs, group hierarchies, type scopes, and cyclic-safe
- * declarative permission propagation.
+ * Evaluates graph-based access control decisions against any {@link GraphReader} using Default Deny
+ * and global "Deny Wins" ("Verbieten gewinnt") across direct ACLs, group hierarchies, type scopes,
+ * and cyclic-safe declarative permission propagation.
  */
 final class PermissionEvaluator {
 
@@ -53,12 +54,12 @@ final class PermissionEvaluator {
     }
 
     static AccessDecision evaluate(
-            MutableGraphState state,
+            GraphReader reader,
             String principalId,
             Permission permission,
             EntityId targetId
     ) {
-        Objects.requireNonNull(state, "state");
+        Objects.requireNonNull(reader, "reader");
         Objects.requireNonNull(principalId, "principalId");
         Objects.requireNonNull(permission, "permission");
         Objects.requireNonNull(targetId, "targetId");
@@ -66,7 +67,9 @@ final class PermissionEvaluator {
             throw new IllegalArgumentException("principalId must not be blank");
         }
 
-        if (!state.entities.containsKey(targetId) && !state.edges.containsKey(targetId)) {
+        Optional<Edge> edgeTargetOpt = reader.findEdge(targetId);
+        Optional<EntityNode> entityTargetOpt = edgeTargetOpt.isPresent() ? Optional.empty() : reader.findEntity(targetId);
+        if (edgeTargetOpt.isEmpty() && entityTargetOpt.isEmpty()) {
             return AccessDecision.deny(
                     principalId,
                     permission,
@@ -77,8 +80,8 @@ final class PermissionEvaluator {
             );
         }
 
-        EntityId principalEntityId = state.principalByName.get(principalId);
-        if (principalEntityId == null) {
+        Optional<EntityId> principalEntityOpt = reader.findPrincipalByName(principalId);
+        if (principalEntityOpt.isEmpty()) {
             return AccessDecision.deny(
                     principalId,
                     permission,
@@ -89,22 +92,22 @@ final class PermissionEvaluator {
             );
         }
 
-        Set<EntityId> effectivePrincipals = expandPrincipalHierarchy(state, principalEntityId);
-        Edge edgeTarget = state.edges.get(targetId);
-        if (edgeTarget != null) {
-            return evaluateEdge(state, principalId, permission, edgeTarget, effectivePrincipals);
+        Set<EntityId> effectivePrincipals = expandPrincipalHierarchy(reader, principalEntityOpt.get());
+        if (edgeTargetOpt.isPresent()) {
+            return evaluateEdge(reader, principalId, permission, edgeTargetOpt.get(), effectivePrincipals);
         }
-        return evaluateEntity(state, principalId, permission, targetId, effectivePrincipals);
+        return evaluateEntity(reader, principalId, permission, targetId, entityTargetOpt.get(), effectivePrincipals);
     }
 
     private static AccessDecision evaluateEntity(
-            MutableGraphState state,
+            GraphReader reader,
             String principalId,
             Permission permission,
             EntityId targetId,
+            EntityNode targetNode,
             Set<EntityId> effectivePrincipals
     ) {
-        List<AclEntry> directAcls = readMatchingAcls(state, targetId, effectivePrincipals, permission);
+        List<AclEntry> directAcls = readMatchingAcls(reader, targetId, effectivePrincipals, permission);
         Optional<AclEntry> directDeny = directAcls.stream()
                 .filter(e -> e.effect() == AccessEffect.DENY)
                 .findFirst();
@@ -127,9 +130,8 @@ final class PermissionEvaluator {
         AccessDecision inheritedDeny = null;
         AccessDecision inheritedAllow = null;
 
-        EntityNode targetNode = state.entities.get(targetId);
         if (targetNode != null && !targetId.equals(targetNode.typeId())) {
-            List<AclEntry> typeAcls = readMatchingAcls(state, targetNode.typeId(), effectivePrincipals, permission);
+            List<AclEntry> typeAcls = readMatchingAcls(reader, targetNode.typeId(), effectivePrincipals, permission);
             for (AclEntry acl : typeAcls) {
                 if (acl.effect() == AccessEffect.DENY && inheritedDeny == null) {
                     inheritedDeny = AccessDecision.deny(
@@ -153,19 +155,17 @@ final class PermissionEvaluator {
             }
         }
 
-        // For value nodes (e.g. attribute values like Salary), also honor explicit DENY on incoming predicate(s)
-        // when no non-denied incoming path exposes the value.
         if (inheritedDeny == null && targetNode != null && targetNode.kind() == EntityKind.VALUE) {
-            AccessDecision predDeny = checkValueIncomingPredicateDeny(state, principalId, permission, targetId, effectivePrincipals);
+            AccessDecision predDeny = checkValueIncomingPredicateDeny(reader, principalId, permission, targetId, effectivePrincipals);
             if (predDeny != null) {
                 inheritedDeny = predDeny;
             }
         }
 
-        List<PropagationRule> rules = readPropagationRules(state, permission);
+        List<PropagationRule> rules = readPropagationRules(reader, permission);
         if (!rules.isEmpty()) {
             AccessDecision[] propagationOutcome = bfsPropagation(
-                    state, principalId, permission, targetId, effectivePrincipals, rules
+                    reader, principalId, permission, targetId, effectivePrincipals, rules
             );
             if (inheritedDeny == null && propagationOutcome[0] != null) {
                 inheritedDeny = propagationOutcome[0];
@@ -201,15 +201,25 @@ final class PermissionEvaluator {
         );
     }
 
+    private static AccessDecision evaluateEntityById(
+            GraphReader reader,
+            String principalId,
+            Permission permission,
+            EntityId targetId,
+            Set<EntityId> effectivePrincipals
+    ) {
+        return evaluateEntity(reader, principalId, permission, targetId, reader.findEntity(targetId).orElse(null), effectivePrincipals);
+    }
+
     private static AccessDecision evaluateEdge(
-            MutableGraphState state,
+            GraphReader reader,
             String principalId,
             Permission permission,
             Edge edge,
             Set<EntityId> effectivePrincipals
     ) {
         EntityId edgeId = edge.id();
-        List<AclEntry> directAcls = readMatchingAcls(state, edgeId, effectivePrincipals, permission);
+        List<AclEntry> directAcls = readMatchingAcls(reader, edgeId, effectivePrincipals, permission);
         Optional<AclEntry> directDeny = directAcls.stream()
                 .filter(e -> e.effect() == AccessEffect.DENY)
                 .findFirst();
@@ -224,7 +234,7 @@ final class PermissionEvaluator {
             );
         }
 
-        AccessDecision predDecision = evaluateEntity(state, principalId, permission, edge.predicateId(), effectivePrincipals);
+        AccessDecision predDecision = evaluateEntityById(reader, principalId, permission, edge.predicateId(), effectivePrincipals);
         if (!predDecision.allowed() && isExplicitOrInheritedDeny(predDecision.reason())) {
             return AccessDecision.deny(
                     principalId,
@@ -236,7 +246,7 @@ final class PermissionEvaluator {
             );
         }
 
-        AccessDecision sourceDecision = evaluateEntity(state, principalId, permission, edge.sourceId(), effectivePrincipals);
+        AccessDecision sourceDecision = evaluateEntityById(reader, principalId, permission, edge.sourceId(), effectivePrincipals);
         if (!sourceDecision.allowed() && isExplicitOrInheritedDeny(sourceDecision.reason())) {
             return AccessDecision.deny(
                     principalId,
@@ -248,7 +258,7 @@ final class PermissionEvaluator {
             );
         }
 
-        AccessDecision targetDecision = evaluateEntity(state, principalId, permission, edge.targetId(), effectivePrincipals);
+        AccessDecision targetDecision = evaluateEntityById(reader, principalId, permission, edge.targetId(), effectivePrincipals);
         if (!targetDecision.allowed() && isExplicitOrInheritedDeny(targetDecision.reason())) {
             return AccessDecision.deny(
                     principalId,
@@ -307,13 +317,13 @@ final class PermissionEvaluator {
     }
 
     private static AccessDecision checkValueIncomingPredicateDeny(
-            MutableGraphState state,
+            GraphReader reader,
             String principalId,
             Permission permission,
             EntityId valueId,
             Set<EntityId> effectivePrincipals
     ) {
-        List<Edge> incoming = state.findIncomingEdges(valueId);
+        List<Edge> incoming = reader.findIncomingEdges(valueId);
         if (incoming.isEmpty()) {
             return null;
         }
@@ -323,7 +333,7 @@ final class PermissionEvaluator {
             if (BootstrapIds.HAS_MUTABILITY.equals(edge.predicateId()) || BootstrapIds.HAS_NAME.equals(edge.predicateId())) {
                 continue;
             }
-            List<AclEntry> predAcls = readMatchingAcls(state, edge.predicateId(), effectivePrincipals, permission);
+            List<AclEntry> predAcls = readMatchingAcls(reader, edge.predicateId(), effectivePrincipals, permission);
             Optional<AclEntry> deny = predAcls.stream().filter(a -> a.effect() == AccessEffect.DENY).findFirst();
             if (deny.isPresent()) {
                 if (firstDeny == null) {
@@ -344,7 +354,7 @@ final class PermissionEvaluator {
     }
 
     private static AccessDecision[] bfsPropagation(
-            MutableGraphState state,
+            GraphReader reader,
             String principalId,
             Permission permission,
             EntityId targetId,
@@ -365,12 +375,12 @@ final class PermissionEvaluator {
             List<EntityId> neighbors = new ArrayList<>();
             for (PropagationRule rule : rules) {
                 if (rule.direction() == PropagationDirection.OUTGOING || rule.direction() == PropagationDirection.BOTH) {
-                    for (Edge edge : state.findIncomingEdges(current, rule.predicateId())) {
+                    for (Edge edge : reader.findIncomingEdges(current, rule.predicateId())) {
                         neighbors.add(edge.sourceId());
                     }
                 }
                 if (rule.direction() == PropagationDirection.INCOMING || rule.direction() == PropagationDirection.BOTH) {
-                    for (Edge edge : state.findOutgoingEdges(current, rule.predicateId())) {
+                    for (Edge edge : reader.findOutgoingEdges(current, rule.predicateId())) {
                         neighbors.add(edge.targetId());
                     }
                 }
@@ -386,13 +396,13 @@ final class PermissionEvaluator {
 
                 List<EntityId> scopesToCheck = new ArrayList<>();
                 scopesToCheck.add(ancestor);
-                EntityNode ancestorNode = state.entities.get(ancestor);
+                EntityNode ancestorNode = reader.findEntity(ancestor).orElse(null);
                 if (ancestorNode != null && !ancestor.equals(ancestorNode.typeId())) {
                     scopesToCheck.add(ancestorNode.typeId());
                 }
 
                 for (EntityId scopeId : scopesToCheck) {
-                    List<AclEntry> acls = readMatchingAcls(state, scopeId, effectivePrincipals, permission);
+                    List<AclEntry> acls = readMatchingAcls(reader, scopeId, effectivePrincipals, permission);
                     for (AclEntry acl : acls) {
                         List<EntityId> path = reconstructPath(targetId, ancestor, childBackpointer, scopeId, acl.aclId());
                         if (acl.effect() == AccessEffect.DENY && firstDeny == null) {
@@ -446,14 +456,14 @@ final class PermissionEvaluator {
         return List.copyOf(path);
     }
 
-    private static Set<EntityId> expandPrincipalHierarchy(MutableGraphState state, EntityId principalEntityId) {
+    private static Set<EntityId> expandPrincipalHierarchy(GraphReader reader, EntityId principalEntityId) {
         Set<EntityId> principals = new LinkedHashSet<>();
         Deque<EntityId> queue = new ArrayDeque<>();
         principals.add(principalEntityId);
         queue.add(principalEntityId);
         while (!queue.isEmpty()) {
             EntityId current = queue.poll();
-            List<EntityId> groups = state.findOutgoingEdges(current, BootstrapIds.MEMBER_OF_GROUP).stream()
+            List<EntityId> groups = reader.findOutgoingEdges(current, BootstrapIds.MEMBER_OF_GROUP).stream()
                     .map(Edge::targetId)
                     .sorted(Comparator.naturalOrder())
                     .toList();
@@ -467,12 +477,12 @@ final class PermissionEvaluator {
     }
 
     private static List<AclEntry> readMatchingAcls(
-            MutableGraphState state,
+            GraphReader reader,
             EntityId targetId,
             Set<EntityId> effectivePrincipals,
             Permission requestedPermission
     ) {
-        List<Edge> targetEdges = state.findIncomingEdges(targetId, BootstrapIds.ACL_TARGET);
+        List<Edge> targetEdges = reader.findIncomingEdges(targetId, BootstrapIds.ACL_TARGET);
         if (targetEdges.isEmpty()) {
             return List.of();
         }
@@ -482,12 +492,12 @@ final class PermissionEvaluator {
                 .sorted(Comparator.naturalOrder())
                 .toList();
         for (EntityId aclId : aclIds) {
-            Optional<EntityId> aclPrincipal = singleEdgeTarget(state, aclId, BootstrapIds.ACL_PRINCIPAL);
+            Optional<EntityId> aclPrincipal = singleEdgeTarget(reader, aclId, BootstrapIds.ACL_PRINCIPAL);
             if (aclPrincipal.isEmpty() || !effectivePrincipals.contains(aclPrincipal.get())) {
                 continue;
             }
-            Optional<String> effectStr = singleStringTarget(state, aclId, BootstrapIds.ACL_EFFECT);
-            Optional<String> permStr = singleStringTarget(state, aclId, BootstrapIds.ACL_PERMISSION);
+            Optional<String> effectStr = singleStringTarget(reader, aclId, BootstrapIds.ACL_EFFECT);
+            Optional<String> permStr = singleStringTarget(reader, aclId, BootstrapIds.ACL_PERMISSION);
             if (effectStr.isEmpty() || permStr.isEmpty()) {
                 continue;
             }
@@ -504,17 +514,25 @@ final class PermissionEvaluator {
         return matched;
     }
 
-    private static List<PropagationRule> readPropagationRules(MutableGraphState state, Permission requestedPermission) {
+    private static List<PropagationRule> readPropagationRules(GraphReader reader, Permission requestedPermission) {
+        List<EntityId> ruleIds;
+        if (reader instanceof PropagationRuleSource fastSource) {
+            ruleIds = fastSource.propagationRuleIds();
+        } else {
+            ruleIds = reader.allEntities().stream()
+                    .filter(n -> BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(n.typeId()))
+                    .map(EntityNode::id)
+                    .sorted(Comparator.naturalOrder())
+                    .toList();
+        }
+        if (ruleIds.isEmpty()) {
+            return List.of();
+        }
         List<PropagationRule> rules = new ArrayList<>();
-        List<EntityId> ruleIds = state.entities.values().stream()
-                .filter(n -> BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(n.typeId()))
-                .map(EntityNode::id)
-                .sorted(Comparator.naturalOrder())
-                .toList();
         for (EntityId ruleId : ruleIds) {
-            Optional<EntityId> predId = singleEdgeTarget(state, ruleId, BootstrapIds.PROPAGATION_PREDICATE);
-            Optional<String> dirStr = singleStringTarget(state, ruleId, BootstrapIds.PROPAGATION_DIRECTION);
-            Optional<String> permStr = singleStringTarget(state, ruleId, BootstrapIds.PROPAGATION_PERMISSION);
+            Optional<EntityId> predId = singleEdgeTarget(reader, ruleId, BootstrapIds.PROPAGATION_PREDICATE);
+            Optional<String> dirStr = singleStringTarget(reader, ruleId, BootstrapIds.PROPAGATION_DIRECTION);
+            Optional<String> permStr = singleStringTarget(reader, ruleId, BootstrapIds.PROPAGATION_PERMISSION);
             if (predId.isPresent() && dirStr.isPresent() && permStr.isPresent()) {
                 Permission rulePerm = Permission.valueOf(permStr.get());
                 if (rulePerm == requestedPermission || rulePerm == Permission.ADMIN) {
@@ -525,17 +543,17 @@ final class PermissionEvaluator {
         return rules;
     }
 
-    private static Optional<EntityId> singleEdgeTarget(MutableGraphState state, EntityId sourceId, EntityId predicateId) {
-        List<Edge> edges = state.findOutgoingEdges(sourceId, predicateId);
+    private static Optional<EntityId> singleEdgeTarget(GraphReader reader, EntityId sourceId, EntityId predicateId) {
+        List<Edge> edges = reader.findOutgoingEdges(sourceId, predicateId);
         return edges.isEmpty() ? Optional.empty() : Optional.of(edges.getFirst().targetId());
     }
 
-    private static Optional<String> singleStringTarget(MutableGraphState state, EntityId sourceId, EntityId predicateId) {
-        Optional<EntityId> valueId = singleEdgeTarget(state, sourceId, predicateId);
+    private static Optional<String> singleStringTarget(GraphReader reader, EntityId sourceId, EntityId predicateId) {
+        Optional<EntityId> valueId = singleEdgeTarget(reader, sourceId, predicateId);
         if (valueId.isEmpty()) {
             return Optional.empty();
         }
-        EntityNode node = state.entities.get(valueId.get());
+        EntityNode node = reader.findEntity(valueId.get()).orElse(null);
         if (node != null && node.payload().isPresent() && node.payload().get() instanceof Value.StringValue(String val)) {
             return Optional.of(val);
         }

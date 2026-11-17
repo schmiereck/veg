@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Structural three-way merge engine over the commit DAG (V-07, V-12, V-13, H5, T10–T12).
@@ -74,19 +75,34 @@ final class ThreeWayMergeEngine {
             CommitId targetCommitId,
             MergePolicy policy
     ) {
+        return prepareMerge(
+                commits,
+                commitId -> snapshots.get(commitId).state(),
+                sourceCommitId,
+                targetCommitId,
+                policy
+        );
+    }
+
+    static PreparedMerge prepareMerge(
+            List<Commit> commits,
+            Function<CommitId, MutableGraphState> stateLookup,
+            CommitId sourceCommitId,
+            CommitId targetCommitId,
+            MergePolicy policy
+    ) {
         CommitId baseCommitId = findCommonAncestor(commits, sourceCommitId, targetCommitId);
-        InMemoryGraphSnapshot baseSnap = snapshots.get(baseCommitId);
-        InMemoryGraphSnapshot targetSnap = snapshots.get(targetCommitId);
-        InMemoryGraphSnapshot effectiveSourceSnap = buildFilteredSourceSnapshot(
-                commits, snapshots, baseCommitId, sourceCommitId, policy);
+        MutableGraphState baseState = stateLookup.apply(baseCommitId);
+        MutableGraphState targetState = stateLookup.apply(targetCommitId);
+        InMemoryGraphSnapshot baseSnap = new InMemoryGraphSnapshot(baseState);
+        InMemoryGraphSnapshot targetSnap = new InMemoryGraphSnapshot(targetState);
+        MutableGraphState sourceState = buildFilteredSourceState(
+                commits, stateLookup, baseCommitId, sourceCommitId, policy);
+        InMemoryGraphSnapshot effectiveSourceSnap = new InMemoryGraphSnapshot(sourceState);
 
         if (baseCommitId.equals(sourceCommitId)) {
-            return new PreparedMerge(true, baseCommitId, targetSnap.copyState(), List.of(), List.of());
+            return new PreparedMerge(true, baseCommitId, targetState.copy(), List.of(), List.of());
         }
-
-        MutableGraphState baseState = baseSnap.state();
-        MutableGraphState sourceState = effectiveSourceSnap.state();
-        MutableGraphState targetState = targetSnap.state();
 
         GraphDiff sourceDiff = GraphDiffCalculator.compute(baseCommitId, baseSnap, sourceCommitId, effectiveSourceSnap);
         GraphDiff targetDiff = GraphDiffCalculator.compute(baseCommitId, baseSnap, targetCommitId, targetSnap);
@@ -118,9 +134,9 @@ final class ThreeWayMergeEngine {
         return new PreparedMerge(true, baseCommitId, merged, changesFromTarget, List.of());
     }
 
-    private static InMemoryGraphSnapshot buildFilteredSourceSnapshot(
+    private static MutableGraphState buildFilteredSourceState(
             List<Commit> commits,
-            Map<CommitId, InMemoryGraphSnapshot> snapshots,
+            Function<CommitId, MutableGraphState> stateLookup,
             CommitId baseId,
             CommitId sourceId,
             MergePolicy policy
@@ -135,10 +151,10 @@ final class ThreeWayMergeEngine {
 
         boolean allIncluded = sourceCommits.stream().allMatch(c -> policy.includes(c.dataCategory()));
         if (allIncluded) {
-            return snapshots.get(sourceId);
+            return stateLookup.apply(sourceId);
         }
 
-        MutableGraphState filtered = snapshots.get(baseId).copyState();
+        MutableGraphState filtered = stateLookup.apply(baseId).copy();
         for (Commit commit : sourceCommits) {
             boolean includeAllChanges = policy.includes(commit.dataCategory());
             for (Change change : commit.changes()) {
@@ -148,7 +164,7 @@ final class ThreeWayMergeEngine {
             }
         }
         filtered.rebuildDerivedIndexes();
-        return new InMemoryGraphSnapshot(filtered);
+        return filtered;
     }
 
     private static boolean isSchemaChange(MutableGraphState state, Change change) {

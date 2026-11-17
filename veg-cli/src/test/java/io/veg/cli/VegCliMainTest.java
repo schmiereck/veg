@@ -30,7 +30,8 @@ class VegCliMainTest {
                 "VEG Stage 3", "replay matches live=true",
                 "VEG Stage 4", "Merge succeeded=true",
                 "VEG Stage 5", "HISTORICAL_HEAD_DENY",
-                "VEG Stage 6", "LUBM imported objects=42", "BSBM imported objects=32", "reifiedAnnotations=2"
+                "VEG Stage 6", "LUBM imported objects=42", "BSBM imported objects=32", "reifiedAnnotations=2",
+                "VEG Stage 7", "Same LUBM+inc query across EngineA/B/C rows=8/8/8"
         );
     }
 
@@ -115,5 +116,33 @@ class VegCliMainTest {
         assertThat(code).isZero();
         assertThat(Files.exists(csv)).isTrue();
         assertThat(Files.exists(json)).isTrue();
+    }
+
+    @Test
+    void storageExperimentCommandWritesCsvAndJson(@TempDir Path tempDir) throws Exception {
+        Path csv = tempDir.resolve("storage.csv");
+        Path json = tempDir.resolve("storage.json");
+        ByteArrayOutputStream outBuf = new ByteArrayOutputStream();
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+
+        int code = VegCliMain.execute(
+                new String[]{
+                        "storage-experiment",
+                        "--entities", "60",
+                        "--commits", "6",
+                        "--branches", "10",
+                        "--seed", "42",
+                        "--warmup", "0",
+                        "--queries", "15",
+                        "--output", csv.toString(),
+                        "--json", json.toString()
+                },
+                new PrintStream(outBuf, true, StandardCharsets.UTF_8),
+                new PrintStream(errBuf, true, StandardCharsets.UTF_8));
+
+        assertThat(code).isZero();
+        assertThat(Files.exists(csv)).isTrue();
+        assertThat(Files.exists(json)).isTrue();
+        assertThat(Files.readString(csv)).contains("ENGINE_A_HASHMAP", "ENGINE_C_PERSISTENT_TREE");
     }
 }

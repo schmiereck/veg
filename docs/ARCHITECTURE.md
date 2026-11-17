@@ -85,3 +85,11 @@ Query- und RDF-Interoperabilität liegen bewusst in `veg-engine-api` über das a
 
 - `GraphQuery` & `GraphQueryDsl` (`veg-engine-api`) — Storage-unabhängige Abfrage-, Join-, Filter-, Sortier- und Paging-Schicht über Live-Snapshots, historische `asOf`-Zustände und `AuthorizedGraphReader`.
 - `RdfGraphExporter` & `RdfGraphImporter` (`veg-engine-api`) — Eigenständiger Turtle-(`.ttl`) und N-Triples-(`.nt`) Export/Import mit Reifikation (`rdf:Statement`), Typ-Treue und expliziter Warnung bei unterdrückter Provenienz (`T18`).
+
+## Stufe-7-Storage-Backends (`veg-engine-memory`)
+
+Durch [CommitPublicationTarget](file:///C:/Users/thomas/Projekte/veg/veg-engine-memory/src/main/java/io/veg/engine/memory/CommitPublicationTarget.java), `PropagationRuleSource` und entkoppelte Helfer (`PermissionEvaluator`, `SemanticInferenceEngine`, `AuthorizedGraphReaderImpl`, `ThreeWayMergeEngine`) teilen sich drei physisch unterschiedliche Backends dieselbe Transaktions-, Merge- und Sicherheitslogik:
+
+1. **Engine A (`InMemoryVersionedDatabase` / `InMemoryGraphSnapshot`):** Naiver `HashMap`/`ArrayList`-Snapshot pro Commit (Baseline).
+2. **Engine B (`CompactVersionedDatabase` / `CompactGraphSnapshot` / `ValueInterner`):** Sortierte primitive `long[]`-/CSR-Arrays (`snapshotInterval = 1`) bzw. Journal + periodische Checkpoints (`snapshotInterval > 1`) plus legales Interning unveränderlicher `Value`-Payloads.
+3. **Engine C (`PersistentTreeVersionedDatabase` / `PersistentGraphSnapshot` / `PersistentLongMap`):** Strukturell geteilte 32-Wege-Bit-Partitionierte Radix-Tries mit reinem Pfadkopieren (`O(log32 N)`) pro Commit. Siehe [ADR-0008](adr/0008-storage-engine-comparison-and-persistent-tree-selection.md).

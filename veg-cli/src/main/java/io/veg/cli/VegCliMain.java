@@ -8,6 +8,10 @@ import io.veg.benchmarks.BaselineBenchmarkRunner;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkConfig;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkReport;
 import io.veg.benchmarks.BaselineBenchmarkRunner.IterationResult;
+import io.veg.benchmarks.StorageEngineComparisonRunner;
+import io.veg.benchmarks.StorageEngineComparisonRunner.ComparisonConfig;
+import io.veg.benchmarks.StorageEngineComparisonRunner.ComparisonReport;
+import io.veg.benchmarks.StorageEngineComparisonRunner.EngineResult;
 import io.veg.engine.AuthorizedGraphReader;
 import io.veg.engine.GraphReader;
 import io.veg.engine.GraphSession;
@@ -15,8 +19,10 @@ import io.veg.engine.GraphTransaction;
 import io.veg.engine.StagingWorkspace;
 import io.veg.engine.TypeMismatchException;
 import io.veg.engine.VersionedGraphDatabase;
+import io.veg.engine.memory.CompactVersionedDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
 import io.veg.engine.memory.InMemoryVersionedDatabase;
+import io.veg.engine.memory.PersistentTreeVersionedDatabase;
 import io.veg.fixtures.RdfBenchmarkDatasets;
 import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
@@ -79,6 +85,7 @@ public final class VegCliMain {
             case "import-rdf" -> runImportRdf(args, out, err);
             case "benchmark" -> runBenchmark(args, out, err);
             case "assertion-experiment" -> runAssertionExperiment(args, out, err);
+            case "storage-experiment" -> runStorageExperiment(args, out, err);
             case "-h", "--help", "help" -> {
                 printUsage(out);
                 yield 0;
@@ -316,6 +323,46 @@ public final class VegCliMain {
         out.println("T18 Turtle export triples=" + ttlExport.exportedTripleCount()
                 + ", reifiedAnnotations=" + ttlExport.reifiedAnnotationCount()
                 + ", warnings=" + ttlExport.warnings().size());
+
+        runStage7Demo(out);
+    }
+
+    private static void runStage7Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 7 Multi-Engine Equivalence & Persistent Structural Sharing Demo ===");
+
+        VersionedGraphDatabase engineA = new InMemoryVersionedDatabase();
+        CompactVersionedDatabase engineB = new CompactVersionedDatabase(3);
+        PersistentTreeVersionedDatabase engineC = new PersistentTreeVersionedDatabase();
+
+        List<VersionedGraphDatabase> engines = List.of(engineA, engineB, engineC);
+        for (VersionedGraphDatabase db : engines) {
+            try (GraphTransaction tx = db.beginTransaction(Actor.user("admin"), Reason.of("seed LUBM"))) {
+                tx.importTurtle(RdfBenchmarkDatasets.lubmUniversityTurtle());
+                tx.commit();
+            }
+            for (int i = 0; i < 6; i++) {
+                try (GraphTransaction tx = db.beginTransaction(Actor.user("writer"), Reason.of("inc-" + i))) {
+                    EntityId profType = tx.findTypeByName("Professor").orElseThrow();
+                    EntityId strType = tx.findTypeByName("rdf.literal.STRING").orElseThrow();
+                    EntityId namePred = tx.findPredicateByName("name").orElseThrow();
+                    EntityId p = tx.createObject(profType);
+                    tx.connect(p, namePred, tx.createValue(strType, Value.of("Visiting Prof " + i)));
+                    tx.commit();
+                }
+            }
+        }
+
+        String dsl = "USING DERIVED MATCH (p:Professor) JOIN (p)-[memberOf]->(u:University) SELECT p.name";
+        int countA = engineA.currentSnapshot().executeQuery(dsl).size();
+        int countB = engineB.currentSnapshot().executeQuery(dsl).size();
+        int countC = engineC.currentSnapshot().executeQuery(dsl).size();
+
+        out.println("Same LUBM+inc query across EngineA/B/C rows=" + countA + "/" + countB + "/" + countC);
+        out.println("Engine B checkpoints stored=" + engineB.storedCheckpointCount()
+                + " across " + engineB.commitHistory().size() + " commits (internedValues=" + engineB.internedDistinctValueCount() + ")");
+        out.println("Engine C unique persistent radix-32 trie nodes across "
+                + engineC.commitHistory().size() + " commits=" + engineC.countTotalUniqueTrieNodesAcrossAllCommits());
     }
 
     private static int runImportRdf(String[] args, PrintStream out, PrintStream err) throws IOException {
@@ -546,11 +593,85 @@ public final class VegCliMain {
         return 0;
     }
 
+    private static int runStorageExperiment(String[] args, PrintStream out, PrintStream err) throws IOException {
+        int entities = 2_000;
+        int commits = 50;
+        int branches = 500;
+        long seed = 42L;
+        int warmup = 1;
+        int queries = 400;
+        Path csvOutput = null;
+        Path jsonOutput = null;
+
+        for (int i = 1; i < args.length; i++) {
+            String flag = args[i];
+            if (i + 1 >= args.length) {
+                err.println("Missing value for option: " + flag);
+                return 1;
+            }
+            String val = args[++i];
+            switch (flag) {
+                case "--entities" -> entities = Integer.parseInt(val);
+                case "--commits" -> commits = Integer.parseInt(val);
+                case "--branches" -> branches = Integer.parseInt(val);
+                case "--seed" -> seed = Long.parseLong(val);
+                case "--warmup" -> warmup = Integer.parseInt(val);
+                case "--queries" -> queries = Integer.parseInt(val);
+                case "--output" -> csvOutput = Path.of(val);
+                case "--json" -> jsonOutput = Path.of(val);
+                default -> {
+                    err.println("Unknown option: " + flag);
+                    return 1;
+                }
+            }
+        }
+
+        ComparisonConfig config = new ComparisonConfig(entities, commits, branches, seed, warmup, queries);
+        StorageEngineComparisonRunner runner = new StorageEngineComparisonRunner();
+        ComparisonReport report = runner.runAllEngines(config);
+
+        out.printf(Locale.ROOT,
+                "Storage Experiment | Java=%s | Entities=%d | Commits=%d | Branches=%d | Seed=%d%n",
+                report.environment().javaVersion(),
+                config.entityCount(),
+                config.commitCount(),
+                config.branchCount(),
+                config.seed());
+
+        for (EngineResult r : report.results()) {
+            out.printf(Locale.ROOT,
+                    "%s: baseEntities=%d commits=%d branches=%d heap=%.2f MB (%.1f B/ent) W2=%.1f c/s W1a=%.0f ns W3-5hop+ACL=%.0f ns W4-branches=%.2f ms W5-merge=%.2f ms W7-asOf=%.0f ns%n",
+                    r.engineName(),
+                    r.entitiesAfterBase(),
+                    r.totalCommits(),
+                    r.totalBranches(),
+                    r.retainedHeapBytes() / (1024.0 * 1024.0),
+                    r.approxBytesPerEntity(),
+                    r.w2CommitThroughputPerSec(),
+                    (double) r.w1aOperativeMixP50Ns(),
+                    (double) r.w3Traversal5HopAclP50Ns(),
+                    r.w4BranchesMs(),
+                    r.w5MergeMs(),
+                    (double) r.w7HistoricalAsOfP50Ns());
+        }
+
+        if (csvOutput != null) {
+            StorageEngineComparisonRunner.writeReportCsv(report, csvOutput);
+            out.println("Wrote CSV report to " + csvOutput);
+        }
+        if (jsonOutput != null) {
+            StorageEngineComparisonRunner.writeReportJson(report, jsonOutput);
+            out.println("Wrote JSON report to " + jsonOutput);
+        }
+        return 0;
+    }
+
     private static void printUsage(PrintStream out) {
         out.println("Usage:");
         out.println("  veg-cli demo");
         out.println("  veg-cli import-rdf --input <file.ttl|.nt> [--format turtle|ntriples] [--query \"<DSL>\"] [--export <out.ttl>]");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli assertion-experiment [--pairs N] [--seed S] [--densities 1,2,5] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
+        out.println("  veg-cli storage-experiment [--entities N] [--commits C] [--branches B] [--seed S] [--warmup W] [--queries Q] [--output results.csv] [--json results.json]");
     }
 }

@@ -41,7 +41,7 @@ import java.util.function.Consumer;
  * Commit-DAG versioned in-memory database supporting branches, tags, selective staging,
  * structural three-way merge, transactions, savepoints, diffs, reverts, and replay (Stages 3–4).
  */
-public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
+public final class InMemoryVersionedDatabase implements VersionedGraphDatabase, CommitPublicationTarget {
 
     private final AtomicLong sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
     private final List<Commit> commits = new ArrayList<>();
@@ -402,11 +402,13 @@ public final class InMemoryVersionedDatabase implements VersionedGraphDatabase {
         );
     }
 
-    MutableGraphState stateCopyForBranch(String branchName) {
+    @Override
+    public MutableGraphState stateCopyForBranch(String branchName) {
         return snapshots.get(branchHead(branchName)).copyState();
     }
 
-    CommitId publishBranchCommit(
+    @Override
+    public CommitId publishBranchCommit(
             String branchName,
             CommitId expectedBaseCommitId,
             DataCategory dataCategory,

@@ -3,6 +3,7 @@ package io.veg.engine.memory;
 import io.veg.engine.AccessDeniedException;
 import io.veg.engine.AuthorizedGraphReader;
 import io.veg.engine.EntityNotFoundException;
+import io.veg.engine.GraphReader;
 import io.veg.model.AccessDecision;
 import io.veg.model.AccessReason;
 import io.veg.model.DerivedAssertion;
@@ -24,15 +25,15 @@ import java.util.Set;
  */
 final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
 
-    private final InMemoryGraphSnapshot targetSnapshot;
-    private final InMemoryGraphSnapshot currentHeadSnapshot;
+    private final GraphReader targetSnapshot;
+    private final GraphReader currentHeadSnapshot;
     private final String principalId;
     private final String branchName;
     private final Set<String> allowedBranchPrincipals;
 
     AuthorizedGraphReaderImpl(
-            InMemoryGraphSnapshot targetSnapshot,
-            InMemoryGraphSnapshot currentHeadSnapshot,
+            GraphReader targetSnapshot,
+            GraphReader currentHeadSnapshot,
             String principalId,
             String branchName,
             Set<String> allowedBranchPrincipals
@@ -69,16 +70,15 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
         }
 
         AccessDecision targetDecision = PermissionEvaluator.evaluate(
-                targetSnapshot.state(), principalId, permission, targetId
+                targetSnapshot, principalId, permission, targetId
         );
         if (!targetDecision.allowed()) {
             return targetDecision;
         }
 
         if (currentHeadSnapshot != null && currentHeadSnapshot != targetSnapshot) {
-            MutableGraphState headState = currentHeadSnapshot.state();
-            if (headState.entities.containsKey(targetId) || headState.edges.containsKey(targetId)) {
-                AccessDecision headDecision = PermissionEvaluator.evaluate(headState, principalId, permission, targetId);
+            if (currentHeadSnapshot.findEntity(targetId).isPresent() || currentHeadSnapshot.findEdge(targetId).isPresent()) {
+                AccessDecision headDecision = PermissionEvaluator.evaluate(currentHeadSnapshot, principalId, permission, targetId);
                 if (!headDecision.allowed()) {
                     return AccessDecision.deny(
                             principalId,
@@ -90,9 +90,7 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
                     );
                 }
             } else {
-                // Element was removed before current HEAD: verify principal still isn't explicitly denied
-                // on its historical type or edge predicate in current HEAD.
-                AccessDecision removedMetaCheck = checkRemovedElementMetaRevocation(headState, permission, targetId);
+                AccessDecision removedMetaCheck = checkRemovedElementMetaRevocation(currentHeadSnapshot, permission, targetId);
                 if (removedMetaCheck != null) {
                     return removedMetaCheck;
                 }
@@ -103,44 +101,50 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
     }
 
     private AccessDecision checkRemovedElementMetaRevocation(
-            MutableGraphState headState,
+            GraphReader headReader,
             Permission permission,
             EntityId targetId
     ) {
-        EntityNode historicalNode = targetSnapshot.state().entities.get(targetId);
-        if (historicalNode != null && headState.entities.containsKey(historicalNode.typeId())) {
-            AccessDecision typeHeadDecision = PermissionEvaluator.evaluate(
-                    headState, principalId, permission, historicalNode.typeId()
-            );
-            if (!typeHeadDecision.allowed()
-                    && (typeHeadDecision.reason() == AccessReason.DIRECT_DENY
-                    || typeHeadDecision.reason() == AccessReason.INHERITED_DENY)) {
-                return AccessDecision.deny(
-                        principalId,
-                        permission,
-                        targetId,
-                        AccessReason.HISTORICAL_HEAD_DENY,
-                        typeHeadDecision.winningPath(),
-                        "Type " + historicalNode.typeId() + " is denied at current HEAD"
+        Optional<EntityNode> historicalNodeOpt = targetSnapshot.findEntity(targetId);
+        if (historicalNodeOpt.isPresent()) {
+            EntityId typeId = historicalNodeOpt.get().typeId();
+            if (headReader.findEntity(typeId).isPresent()) {
+                AccessDecision typeHeadDecision = PermissionEvaluator.evaluate(
+                        headReader, principalId, permission, typeId
                 );
+                if (!typeHeadDecision.allowed()
+                        && (typeHeadDecision.reason() == AccessReason.DIRECT_DENY
+                        || typeHeadDecision.reason() == AccessReason.INHERITED_DENY)) {
+                    return AccessDecision.deny(
+                            principalId,
+                            permission,
+                            targetId,
+                            AccessReason.HISTORICAL_HEAD_DENY,
+                            typeHeadDecision.winningPath(),
+                            "Type " + typeId + " is denied at current HEAD"
+                    );
+                }
             }
         }
-        Edge historicalEdge = targetSnapshot.state().edges.get(targetId);
-        if (historicalEdge != null && headState.entities.containsKey(historicalEdge.predicateId())) {
-            AccessDecision predHeadDecision = PermissionEvaluator.evaluate(
-                    headState, principalId, permission, historicalEdge.predicateId()
-            );
-            if (!predHeadDecision.allowed()
-                    && (predHeadDecision.reason() == AccessReason.DIRECT_DENY
-                    || predHeadDecision.reason() == AccessReason.INHERITED_DENY)) {
-                return AccessDecision.deny(
-                        principalId,
-                        permission,
-                        targetId,
-                        AccessReason.HISTORICAL_HEAD_DENY,
-                        predHeadDecision.winningPath(),
-                        "Predicate " + historicalEdge.predicateId() + " is denied at current HEAD"
+        Optional<Edge> historicalEdgeOpt = targetSnapshot.findEdge(targetId);
+        if (historicalEdgeOpt.isPresent()) {
+            EntityId predicateId = historicalEdgeOpt.get().predicateId();
+            if (headReader.findEntity(predicateId).isPresent()) {
+                AccessDecision predHeadDecision = PermissionEvaluator.evaluate(
+                        headReader, principalId, permission, predicateId
                 );
+                if (!predHeadDecision.allowed()
+                        && (predHeadDecision.reason() == AccessReason.DIRECT_DENY
+                        || predHeadDecision.reason() == AccessReason.INHERITED_DENY)) {
+                    return AccessDecision.deny(
+                            principalId,
+                            permission,
+                            targetId,
+                            AccessReason.HISTORICAL_HEAD_DENY,
+                            predHeadDecision.winningPath(),
+                            "Predicate " + predicateId + " is denied at current HEAD"
+                    );
+                }
             }
         }
         return null;
@@ -388,7 +392,7 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
 
     private boolean isPredicateExplicitlyDenied(EntityId predicateId) {
         AccessDecision targetDecision = PermissionEvaluator.evaluate(
-                targetSnapshot.state(), principalId, Permission.READ, predicateId
+                targetSnapshot, principalId, Permission.READ, predicateId
         );
         if (!targetDecision.allowed()
                 && (targetDecision.reason() == AccessReason.DIRECT_DENY
@@ -397,7 +401,7 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
         }
         if (currentHeadSnapshot != null && currentHeadSnapshot != targetSnapshot) {
             AccessDecision headDecision = PermissionEvaluator.evaluate(
-                    currentHeadSnapshot.state(), principalId, Permission.READ, predicateId
+                    currentHeadSnapshot, principalId, Permission.READ, predicateId
             );
             return !headDecision.allowed()
                     && (headDecision.reason() == AccessReason.DIRECT_DENY

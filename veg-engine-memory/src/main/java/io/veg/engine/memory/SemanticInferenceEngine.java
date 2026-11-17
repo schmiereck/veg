@@ -1,5 +1,6 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.GraphReader;
 import io.veg.model.AssertionOrigin;
 import io.veg.model.BootstrapIds;
 import io.veg.model.DerivedAssertion;
@@ -17,7 +18,7 @@ import java.util.Set;
 
 /**
  * Evaluates minimal semantic predicate rules ({@code HAS_INVERSE_PREDICATE} and transitive
- * {@code HAS_SUPER_PREDICATE}) purely at query time so explicit stored edges remain clean and minimal.
+ * {@code HAS_SUPER_PREDICATE}) purely at query time against any {@link GraphReader}.
  */
 final class SemanticInferenceEngine {
 
@@ -31,14 +32,14 @@ final class SemanticInferenceEngine {
     }
 
     static List<DerivedAssertion> findDerivedOutgoingAssertions(
-            MutableGraphState state,
+            GraphReader reader,
             EntityId sourceId,
             EntityId predicateFilter
     ) {
         Set<DerivedAssertion> derived = new LinkedHashSet<>();
 
-        for (Edge outgoing : state.findOutgoingEdges(sourceId)) {
-            for (EntityId superPred : resolveSuperPredicates(state, outgoing.predicateId())) {
+        for (Edge outgoing : reader.findOutgoingEdges(sourceId)) {
+            for (EntityId superPred : resolveSuperPredicates(reader, outgoing.predicateId())) {
                 if (predicateFilter == null || superPred.equals(predicateFilter)) {
                     derived.add(DerivedAssertion.derived(
                             sourceId,
@@ -52,8 +53,8 @@ final class SemanticInferenceEngine {
             }
         }
 
-        for (Edge incoming : state.findIncomingEdges(sourceId)) {
-            for (EntityId inversePred : resolveInversePredicates(state, incoming.predicateId())) {
+        for (Edge incoming : reader.findIncomingEdges(sourceId)) {
+            for (EntityId inversePred : resolveInversePredicates(reader, incoming.predicateId())) {
                 if (predicateFilter == null || inversePred.equals(predicateFilter)) {
                     derived.add(DerivedAssertion.derived(
                             sourceId,
@@ -64,7 +65,7 @@ final class SemanticInferenceEngine {
                             incoming.predicateId()
                     ));
                 }
-                for (EntityId superOfInverse : resolveSuperPredicates(state, inversePred)) {
+                for (EntityId superOfInverse : resolveSuperPredicates(reader, inversePred)) {
                     if (predicateFilter == null || superOfInverse.equals(predicateFilter)) {
                         derived.add(DerivedAssertion.derived(
                                 sourceId,
@@ -85,34 +86,34 @@ final class SemanticInferenceEngine {
     }
 
     static List<DerivedAssertion> findAllOutgoingAssertions(
-            MutableGraphState state,
+            GraphReader reader,
             EntityId sourceId,
             EntityId predicateFilter
     ) {
         List<DerivedAssertion> all = new ArrayList<>();
         List<Edge> explicitEdges = predicateFilter == null
-                ? state.findOutgoingEdges(sourceId)
-                : state.findOutgoingEdges(sourceId, predicateFilter);
+                ? reader.findOutgoingEdges(sourceId)
+                : reader.findOutgoingEdges(sourceId, predicateFilter);
         for (Edge edge : explicitEdges) {
             all.add(DerivedAssertion.explicit(edge));
         }
-        all.addAll(findDerivedOutgoingAssertions(state, sourceId, predicateFilter));
+        all.addAll(findDerivedOutgoingAssertions(reader, sourceId, predicateFilter));
         all.sort(DETERMINISTIC_ORDER);
         return List.copyOf(all);
     }
 
-    private static Set<EntityId> resolveInversePredicates(MutableGraphState state, EntityId predicateId) {
+    private static Set<EntityId> resolveInversePredicates(GraphReader reader, EntityId predicateId) {
         Set<EntityId> inverses = new LinkedHashSet<>();
-        for (Edge e : state.findOutgoingEdges(predicateId, BootstrapIds.HAS_INVERSE_PREDICATE)) {
+        for (Edge e : reader.findOutgoingEdges(predicateId, BootstrapIds.HAS_INVERSE_PREDICATE)) {
             inverses.add(e.targetId());
         }
-        for (Edge e : state.findIncomingEdges(predicateId, BootstrapIds.HAS_INVERSE_PREDICATE)) {
+        for (Edge e : reader.findIncomingEdges(predicateId, BootstrapIds.HAS_INVERSE_PREDICATE)) {
             inverses.add(e.sourceId());
         }
         return inverses;
     }
 
-    private static Set<EntityId> resolveSuperPredicates(MutableGraphState state, EntityId predicateId) {
+    private static Set<EntityId> resolveSuperPredicates(GraphReader reader, EntityId predicateId) {
         Set<EntityId> visited = new HashSet<>();
         visited.add(predicateId);
         Set<EntityId> supers = new LinkedHashSet<>();
@@ -121,7 +122,7 @@ final class SemanticInferenceEngine {
 
         while (!queue.isEmpty()) {
             EntityId current = queue.poll();
-            for (Edge edge : state.findOutgoingEdges(current, BootstrapIds.HAS_SUPER_PREDICATE)) {
+            for (Edge edge : reader.findOutgoingEdges(current, BootstrapIds.HAS_SUPER_PREDICATE)) {
                 EntityId superPred = edge.targetId();
                 if (visited.add(superPred)) {
                     supers.add(superPred);

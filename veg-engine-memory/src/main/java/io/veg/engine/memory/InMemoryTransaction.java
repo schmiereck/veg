@@ -33,7 +33,7 @@ final class InMemoryTransaction implements GraphTransaction {
     private record SavepointEntry(SavepointId id, MutableGraphState stateSnapshot, int changeCount) {
     }
 
-    private final InMemoryVersionedDatabase database;
+    private final CommitPublicationTarget database;
     private final String branchName;
     private final CommitId baseCommitId;
     private final DataCategory dataCategory;
@@ -49,7 +49,7 @@ final class InMemoryTransaction implements GraphTransaction {
     private boolean open = true;
 
     InMemoryTransaction(
-            InMemoryVersionedDatabase database,
+            CommitPublicationTarget database,
             String branchName,
             CommitId baseCommitId,
             MutableGraphState baseStateCopy,

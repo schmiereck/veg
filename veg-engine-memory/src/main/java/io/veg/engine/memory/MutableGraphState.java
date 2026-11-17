@@ -33,6 +33,7 @@ final class MutableGraphState {
     final Map<String, EntityId> typeByName;
     final Map<String, EntityId> predicateByName;
     final Map<String, EntityId> principalByName;
+    final List<EntityId> propagationRuleIds;
     final Map<EntityId, Map<Value, EntityId>> uniqueValuesByType;
 
     final AtomicLong userEntityIdAllocator;
@@ -50,6 +51,7 @@ final class MutableGraphState {
         this.typeByName = new HashMap<>();
         this.predicateByName = new HashMap<>();
         this.principalByName = new HashMap<>();
+        this.propagationRuleIds = new ArrayList<>();
         this.uniqueValuesByType = new HashMap<>();
         this.userEntityIdAllocator = sharedUserEntityIdAllocator;
         this.nextBootstrapAuxId = 100L;
@@ -63,6 +65,7 @@ final class MutableGraphState {
         this.typeByName = new HashMap<>(source.typeByName);
         this.predicateByName = new HashMap<>(source.predicateByName);
         this.principalByName = new HashMap<>(source.principalByName);
+        this.propagationRuleIds = new ArrayList<>(source.propagationRuleIds);
         this.uniqueValuesByType = new HashMap<>(source.uniqueValuesByType.size());
         for (var entry : source.uniqueValuesByType.entrySet()) {
             this.uniqueValuesByType.put(entry.getKey(), new HashMap<>(entry.getValue()));
@@ -89,6 +92,10 @@ final class MutableGraphState {
 
     void putEntity(EntityNode node) {
         entities.put(node.id(), node);
+        if (BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(node.typeId()) && !propagationRuleIds.contains(node.id())) {
+            propagationRuleIds.add(node.id());
+            propagationRuleIds.sort(Comparator.naturalOrder());
+        }
     }
 
     void putEdge(Edge edge) {
@@ -111,8 +118,11 @@ final class MutableGraphState {
 
     void applyReplayChange(Change change) {
         switch (change) {
-            case Change.EntityCreated(EntityNode node) -> entities.put(node.id(), node);
-            case Change.EntityRemoved(EntityNode node) -> entities.remove(node.id());
+            case Change.EntityCreated(EntityNode node) -> putEntity(node);
+            case Change.EntityRemoved(EntityNode node) -> {
+                entities.remove(node.id());
+                propagationRuleIds.remove(node.id());
+            }
             case Change.ValueUpdated(EntityId entityId, _, Value newValue) -> {
                 EntityNode existing = entities.get(entityId);
                 if (existing == null) {
@@ -131,6 +141,7 @@ final class MutableGraphState {
         typeByName.clear();
         predicateByName.clear();
         principalByName.clear();
+        propagationRuleIds.clear();
         uniqueValuesByType.clear();
 
         long maxUser = EntityId.USER_MIN_ID - 1;
@@ -168,6 +179,8 @@ final class MutableGraphState {
                 }
             } else if (node.kind() == EntityKind.OBJECT && BootstrapIds.META_PRINCIPAL_TYPE.equals(node.typeId())) {
                 resolveName(node.id()).ifPresent(name -> principalByName.put(name, node.id()));
+            } else if (node.kind() == EntityKind.OBJECT && BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(node.typeId())) {
+                propagationRuleIds.add(node.id());
             }
         }
 

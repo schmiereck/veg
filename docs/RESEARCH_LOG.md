@@ -280,3 +280,48 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 7):**  
   Konzeption und Benchmark-Vergleich einer kompakten In-Memory-Repräsentation (**Engine B**) sowie einer persistenten/strukturell geteilten Struktur (**Engine C**) gegen Baseline **Engine A** über `10k` / `100k` Entities und Commit-Historien, inklusive der bestehenden `Stage1`–`Stage6`-Contract-Testsuites (`P-01`).
+
+---
+
+## Eintrag 07 — Stufe 7: Storage-Experimente (Engine A vs. B1/B2 CSR vs. C Persistent Radix-32 Trie)
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 7** (`P-01`–`P-04`, `H3`–`H4`, Workloads `W1`–`W7`):  
+  1. Eine kompakte CSR-Repräsentation (`CompactGraphSnapshot`) mit legalem Payload-Interning (`ValueInterner`, Engine B1/B2) spart deutlich Heap gegenüber `HashMap`-Snapshots (`Engine A`).  
+  2. Eine strukturell geteilte Radix-32-Baumstruktur (`PersistentLongMap` / `PersistentTreeVersionedDatabase`, Engine C) erreicht sowohl den geringsten Speicherzuwachs über viele Commits und `500` parallele Branches (`W4`) als auch konstante Sub-Mikrosekunden-`asOf`-Lesezeiten ohne Delta-Rekonstruktionsstrafe (`W1b`, `W7`).
+
+- **Implementiert:**  
+  - `veg-engine-memory`: Entkopplung über `CommitPublicationTarget`, `PropagationRuleSource` sowie `GraphReader`-basierte `PermissionEvaluator`, `SemanticInferenceEngine`, `AuthorizedGraphReaderImpl` und `ThreeWayMergeEngine`; **Engine B1/B2** (`ValueInterner`, `CompactGraphSnapshot`, `CompactVersionedDatabase`); **Engine C** (`PersistentLongMap`, `PersistentGraphSnapshot`, `PersistentTreeVersionedDatabase`).
+  - `veg-engine-memory` Tests: `CompactEngineContractTest` (B1 Stage 1–6 + B2 Stage 3–6 + Checkpoint-Unit-Test = **158 Tests**) und `PersistentTreeEngineContractTest` (C Stage 1–6 + `PersistentLongMap` & Structural-Sharing-Tests = **90 Tests**).
+  - `veg-benchmarks`: `StorageEngineComparisonRunner` (`W1a`, `W1b`, `W2`, `W3`, `W4`, `W5`, `W6`, `W7` über alle 4 Engines mit CSV/JSON-Export) + `StorageEngineComparisonRunnerTest`.
+  - `veg-cli`: `runStage7Demo` und neuer Befehl `storage-experiment` in `VegCliMain` + Test in `VegCliMainTest`.
+  - Dokumentation & Rohdaten: [docs/experiments/stage7-storage-comparison/](experiments/stage7-storage-comparison/analysis.md) (`README.md`, `results.csv`, `results.json`, `analysis.md`), [ADR-0008](adr/0008-storage-engine-comparison-and-persistent-tree-selection.md), [INVARIANTS.md](INVARIANTS.md) (`I-22`), [ARCHITECTURE.md](ARCHITECTURE.md), [CONCEPT.md](CONCEPT.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **377 / 377 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 19 / 19 bestanden
+  - `veg-engine-memory`: **350 / 350** bestanden (Engine A Contract- & `jqwik`-Suites 94, `CompactEngineContractTest` B1+B2 166, `PersistentTreeEngineContractTest` C 90 — alle Stage-1–6-Verträge identisch erfüllt)
+  - `veg-benchmarks`: 3 / 3 bestanden
+  - `veg-cli`: 5 / 5 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment --entities 2000 --commits 50 --branches 500 --seed 42 --output docs/experiments/stage7-storage-comparison/results.csv --json docs/experiments/stage7-storage-comparison/results.json`:
+  - **Retained Heap (Basisstand `3.107` Entities + `50` Commits):** `Engine A = 22.378.880 B` (`7.202,73 B/ent`) vs. `B1 = 9.634.560 B` (`3.100,92 B/ent`, **-56,9 %**) vs. `B2 = 1.490.768 B` (`479,81 B/ent`, **-93,3 %**) vs. **`Engine C = 1.180.512 B` (`379,95 B/ent`, -94,7 %)**.
+  - **`W4` (`500` Branches, `50` mit Commit):** `Engine A = 20.507.720 B` vs. `B1 = 8.488.024 B` vs. `B2 = 737.712 B` vs. **`Engine C = 69.952 B`** (**293× weniger als Engine A**).
+  - **`W2` Write-Durchsatz & `W7` `asOf` p50:** **`Engine C = 1.593,68 Commits/s` / `300 ns`** vs. `A = 1.454,27 c/s / 800 ns` vs. `B1 = 604,82 c/s / 800 ns` vs. `B2 = 1.021,86 c/s / 845.500 ns` (B2 bricht unter historischen Reads `W1b`/`W7` um 3 Größenordnungen ein).
+  - `demo` Exit-Code 0 (`Same LUBM+inc query across EngineA/B/C rows=8/8/8`, `Engine B checkpoints stored=3 across 8 commits`, `Engine C unique persistent radix-32 trie nodes across 8 commits=3471`).
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt:** Persistent Radix-32 Tries (**Engine C**) liefern gleichzeitig den geringsten Speicherbedarf, den höchsten Write-Durchsatz bei kleinen Commits und konstante Sub-Mikrosekunden-`asOf`-Reads — deutlich überlegen gegenüber Vollkopien (`A`) und reinem Journal-Replay (`B2`) bei historischer Last.
+  - **Bestätigt (`H5`):** 5-Hop-Propagation + ACL (`W3`: `3,51–4,89 ms`) hängt vom Graph-Traversal ab, nicht von der Map-Implementierung — gezieltes Index-/Reachability-Caching wird in Stufe 10 relevant.
+
+- **Risiken und technische Schulden:**  
+  1. Engine C hält alle Trie-Knoten aktuell noch als Java-Objekte rein im Hauptspeicher (`In-Memory`).
+  2. Dauerhafte Crash-feste Disk-Persistenz, WAL, Prüfsummen (`fsync`) und Recovery (`T17`) folgen in Stufe 8.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **GO für Stufe 8 mit Engine C (`PersistentTreeVersionedDatabase`) + Append-Only WAL/Checkpoints**; `CompactGraphSnapshot` optional als komprimiertes Kaltarchiv-Format (`P-07`) bewahren; Vollkopien (`Engine A`) für Persistenz verworfen.
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 8):**  
+  Native Disk-Persistenz (`veg-engine-persistent` oder persistenter Journal-/Checkpoint-Speicher auf Basis von Engine C) mit binärem Append-Only WAL, Prüfsummen, Neustart-Rekonstruktion und Crash-Injection (`T17`, `P-06`, `P-08`).

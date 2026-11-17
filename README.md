@@ -63,6 +63,12 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
   --pairs 5000 --seed 42 --densities 1,2,5 `
   --output docs/experiments/stage2-assertions/results.csv `
   --json docs/experiments/stage2-assertions/results.json
+
+# Stage-7 Storage-Engine-Vergleich (Engine A vs. B1/B2 CSR vs. Engine C Persistent Radix-32 Trie)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
+  --entities 2000 --commits 50 --branches 500 --seed 42 `
+  --output docs/experiments/stage7-storage-comparison/results.csv `
+  --json docs/experiments/stage7-storage-comparison/results.json
 ```
 
 ---
@@ -76,7 +82,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [x] **Stufe 4:** Branches mit struktureller Teilung (`T16`), selektives Staging (`V-06`) & struktureller 3-Wege-Merge (`T10`–`T12`, `V-13`, `ADR-0005`)
 - [x] **Stufe 5:** Versionsbewusste Berechtigungen ("Verbieten gewinnt", Entity/Relation/Attribut, `S-01`–`S-03`, `S-05`, `T13`–`T14`) & abgeleitete Aussagen (`M-12`, `ADR-0006`)
 - [x] **Stufe 6:** Storage-unabhängige Query-API/DSL (`S-04`), RDF/Turtle-Import & -Export (`T18`, `S-06`, `ADR-0007`) sowie LUBM/BSBM-Datensätze
-- [ ] **Stufe 7:** Storage-Experimente & Benchmarks (**Engine A** Map vs. **Engine B** Compact/FFM vs. **Engine C** Persistent Tree)
+- [x] **Stufe 7:** Storage-Experimente & Benchmarks (**Engine A** Map vs. **Engine B1/B2** CSR/Checkpoints vs. **Engine C** Persistent Radix-32 Trie, `W1`–`W7`, `ADR-0008`)
 - [ ] **Stufe 8:** Native Disk-Persistenz, WAL/Commit-Log, Snapshots & Crash-Recovery (`T17`)
 - [ ] **Stufe 10:** Reifung zur Mehrbenutzer-Datenbank (MVCC, Auto-Indizes, Bitemporalität)
 - [ ] **Stufe 9 *(Option / P3)*:** Optionaler Enterprise-/Oracle-CDC-/Outbox-Adapter
@@ -95,6 +101,8 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [ADR-0005: Branching, selektives Staging & struktureller Drei-Wege-Merge](docs/adr/0005-branching-selective-staging-and-three-way-merge.md)
 - [ADR-0006: Graph-Basierte Zugriffskontrolle ("Verbieten gewinnt") & Semantische Prädikat-Inferenz](docs/adr/0006-access-control-deny-wins-and-semantic-inference.md)
 - [ADR-0007: Storage-unabhängige Query-API/DSL & RDF/Turtle-Interoperabilität](docs/adr/0007-query-dsl-and-rdf-turtle-interoperability.md)
+- [ADR-0008: Storage-Engine-Vergleich & Wahl von Engine C (Persistent Radix-32 Trie)](docs/adr/0008-storage-engine-comparison-and-persistent-tree-selection.md)
+- [Stage-7 Storage-Experiment-Auswertung](docs/experiments/stage7-storage-comparison/analysis.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 
 ## Lizenz

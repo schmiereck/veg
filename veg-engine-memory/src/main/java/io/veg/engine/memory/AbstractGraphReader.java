@@ -18,7 +18,7 @@ import java.util.Optional;
 /**
  * Shared {@link GraphReader} implementation backed by a {@link MutableGraphState}.
  */
-abstract class AbstractGraphReader implements GraphReader {
+abstract class AbstractGraphReader implements GraphReader, PropagationRuleSource {
 
     protected abstract MutableGraphState state();
 
@@ -125,32 +125,37 @@ abstract class AbstractGraphReader implements GraphReader {
 
     @Override
     public AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId) {
-        return PermissionEvaluator.evaluate(state(), principalId, permission, targetId);
+        return PermissionEvaluator.evaluate(this, principalId, permission, targetId);
+    }
+
+    @Override
+    public List<EntityId> propagationRuleIds() {
+        return List.copyOf(state().propagationRuleIds);
     }
 
     @Override
     public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
-        return SemanticInferenceEngine.findDerivedOutgoingAssertions(state(), sourceId, null);
+        return SemanticInferenceEngine.findDerivedOutgoingAssertions(this, sourceId, null);
     }
 
     @Override
     public List<DerivedAssertion> findDerivedOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
         Objects.requireNonNull(predicateId, "predicateId must not be null");
-        return SemanticInferenceEngine.findDerivedOutgoingAssertions(state(), sourceId, predicateId);
+        return SemanticInferenceEngine.findDerivedOutgoingAssertions(this, sourceId, predicateId);
     }
 
     @Override
     public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
-        return SemanticInferenceEngine.findAllOutgoingAssertions(state(), sourceId, null);
+        return SemanticInferenceEngine.findAllOutgoingAssertions(this, sourceId, null);
     }
 
     @Override
     public List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId, EntityId predicateId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
         Objects.requireNonNull(predicateId, "predicateId must not be null");
-        return SemanticInferenceEngine.findAllOutgoingAssertions(state(), sourceId, predicateId);
+        return SemanticInferenceEngine.findAllOutgoingAssertions(this, sourceId, predicateId);
     }
 }

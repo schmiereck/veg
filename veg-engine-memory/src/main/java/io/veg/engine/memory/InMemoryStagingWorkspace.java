@@ -35,7 +35,7 @@ final class InMemoryStagingWorkspace extends AbstractGraphReader implements Stag
     private record GroupedChange(EntityId groupId, Change change) {
     }
 
-    private final InMemoryVersionedDatabase database;
+    private final CommitPublicationTarget database;
     private final String branchName;
     private CommitId baseCommitId;
 
@@ -45,7 +45,7 @@ final class InMemoryStagingWorkspace extends AbstractGraphReader implements Stag
     private final InMemoryGraphEngine delegate;
 
     InMemoryStagingWorkspace(
-            InMemoryVersionedDatabase database,
+            CommitPublicationTarget database,
             String branchName,
             CommitId baseCommitId,
             MutableGraphState baseStateCopy
