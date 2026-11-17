@@ -1,5 +1,9 @@
 package io.veg.cli;
 
+import io.veg.benchmarks.AssertionModelComparisonRunner;
+import io.veg.benchmarks.AssertionModelComparisonRunner.ExperimentConfig;
+import io.veg.benchmarks.AssertionModelComparisonRunner.ExperimentReport;
+import io.veg.benchmarks.AssertionModelComparisonRunner.ModelRunResult;
 import io.veg.benchmarks.BaselineBenchmarkRunner;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkConfig;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkReport;
@@ -17,10 +21,12 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 
 /**
- * CLI entry point for running the Stage 1 model demonstration and Stage 0/1 baseline benchmarks.
+ * CLI entry point for running Stage 1/2 demonstrations and reproducible benchmark experiments.
  */
 public final class VegCliMain {
 
@@ -45,6 +51,7 @@ public final class VegCliMain {
                 yield 0;
             }
             case "benchmark" -> runBenchmark(args, out, err);
+            case "assertion-experiment" -> runAssertionExperiment(args, out, err);
             case "-h", "--help", "help" -> {
                 printUsage(out);
                 yield 0;
@@ -174,9 +181,84 @@ public final class VegCliMain {
         return 0;
     }
 
+    private static int runAssertionExperiment(String[] args, PrintStream out, PrintStream err) throws IOException {
+        int pairs = 5_000;
+        long seed = 42L;
+        List<Integer> densities = List.of(1, 2, 5);
+        int warmup = 1;
+        int iterations = 3;
+        int queries = 1_000;
+        Path csvOutput = null;
+        Path jsonOutput = null;
+
+        for (int i = 1; i < args.length; i++) {
+            String flag = args[i];
+            if (i + 1 >= args.length) {
+                err.println("Missing value for option: " + flag);
+                return 1;
+            }
+            String val = args[++i];
+            switch (flag) {
+                case "--pairs" -> pairs = Integer.parseInt(val);
+                case "--seed" -> seed = Long.parseLong(val);
+                case "--densities" -> densities = Arrays.stream(val.split(","))
+                        .map(String::trim)
+                        .map(Integer::parseInt)
+                        .toList();
+                case "--warmup" -> warmup = Integer.parseInt(val);
+                case "--iterations" -> iterations = Integer.parseInt(val);
+                case "--queries" -> queries = Integer.parseInt(val);
+                case "--output" -> csvOutput = Path.of(val);
+                case "--json" -> jsonOutput = Path.of(val);
+                default -> {
+                    err.println("Unknown option: " + flag);
+                    return 1;
+                }
+            }
+        }
+
+        ExperimentConfig config = new ExperimentConfig(pairs, seed, densities, warmup, iterations, queries);
+        AssertionModelComparisonRunner runner = new AssertionModelComparisonRunner();
+        ExperimentReport report = runner.runInMemoryComparison(config);
+
+        out.printf(Locale.ROOT,
+                "Assertion Experiment | Engine=%s | Java=%s | Pairs=%d | Seed=%d%n",
+                report.environment().engineName(),
+                report.environment().javaVersion(),
+                config.pairCount(),
+                config.seed());
+
+        for (ModelRunResult r : report.results()) {
+            out.printf(Locale.ROOT,
+                    "%s (k=%d, iter=%d): entities/assert=%.2f edges/assert=%.2f write=%.2f ms (%.0f assert/s) query p50/p99=%d/%d ns heap/assert=%.1f B matches=%d%n",
+                    r.model(),
+                    r.assertionsPerPair(),
+                    r.iteration(),
+                    r.entitiesPerAssertion(),
+                    r.edgesPerAssertion(),
+                    r.writeDurationMs(),
+                    r.writeAssertionsPerSec(),
+                    r.queryHighConfidenceP50Nanos(),
+                    r.queryHighConfidenceP99Nanos(),
+                    r.approxBytesPerAssertion(),
+                    r.matchedFilterCount());
+        }
+
+        if (csvOutput != null) {
+            AssertionModelComparisonRunner.writeReportCsv(report, csvOutput);
+            out.println("Wrote CSV report to " + csvOutput);
+        }
+        if (jsonOutput != null) {
+            AssertionModelComparisonRunner.writeReportJson(report, jsonOutput);
+            out.println("Wrote JSON report to " + jsonOutput);
+        }
+        return 0;
+    }
+
     private static void printUsage(PrintStream out) {
         out.println("Usage:");
         out.println("  veg-cli demo");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
+        out.println("  veg-cli assertion-experiment [--pairs N] [--seed S] [--densities 1,2,5] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
     }
 }

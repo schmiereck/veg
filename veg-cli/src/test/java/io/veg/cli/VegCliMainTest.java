@@ -53,4 +53,31 @@ class VegCliMainTest {
         assertThat(Files.exists(csv)).isTrue();
         assertThat(Files.exists(json)).isTrue();
     }
+
+    @Test
+    void assertionExperimentCommandWritesCsvAndJson(@TempDir Path tempDir) throws Exception {
+        Path csv = tempDir.resolve("assertions.csv");
+        Path json = tempDir.resolve("assertions.json");
+        ByteArrayOutputStream outBuf = new ByteArrayOutputStream();
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+
+        int code = VegCliMain.execute(
+                new String[]{
+                        "assertion-experiment",
+                        "--pairs", "30",
+                        "--seed", "42",
+                        "--densities", "1,2",
+                        "--warmup", "1",
+                        "--iterations", "1",
+                        "--queries", "15",
+                        "--output", csv.toString(),
+                        "--json", json.toString()
+                },
+                new PrintStream(outBuf, true, StandardCharsets.UTF_8),
+                new PrintStream(errBuf, true, StandardCharsets.UTF_8));
+
+        assertThat(code).isZero();
+        assertThat(Files.exists(csv)).isTrue();
+        assertThat(Files.exists(json)).isTrue();
+    }
 }

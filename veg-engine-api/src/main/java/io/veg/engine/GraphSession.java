@@ -1,7 +1,9 @@
 package io.veg.engine;
 
 import io.veg.model.EntityId;
+import io.veg.model.PredicateConstraints;
 import io.veg.model.Value;
+import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
 /**
@@ -14,13 +16,27 @@ public interface GraphSession extends GraphReader {
 
     EntityId defineObjectType(String name);
 
-    EntityId defineValueType(String name, ValueType scalarType);
+    default EntityId defineValueType(String name, ValueType scalarType) {
+        return defineValueType(name, scalarType, false);
+    }
 
-    EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId);
+    EntityId defineValueType(String name, ValueType scalarType, boolean uniqueValues);
+
+    default EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId) {
+        return definePredicate(name, domainTypeId, rangeTypeId, PredicateConstraints.unconstrained());
+    }
+
+    EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId, PredicateConstraints constraints);
 
     EntityId createObject(EntityId objectTypeId);
 
-    EntityId createValue(EntityId valueTypeId, Value value);
+    default EntityId createValue(EntityId valueTypeId, Value value) {
+        return createValue(valueTypeId, value, ValueMutability.IMMUTABLE);
+    }
+
+    EntityId createValue(EntityId valueTypeId, Value value, ValueMutability mutability);
+
+    void updateValue(EntityId valueEntityId, Value newValue);
 
     EntityId connect(EntityId sourceId, EntityId predicateId, EntityId targetId);
 

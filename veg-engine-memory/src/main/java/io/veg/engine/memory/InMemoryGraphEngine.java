@@ -1,18 +1,23 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.CardinalityViolationException;
 import io.veg.engine.DomainRangeViolationException;
 import io.veg.engine.DuplicateSchemaElementException;
 import io.veg.engine.EntityNotFoundException;
 import io.veg.engine.GraphSession;
+import io.veg.engine.ImmutableValueModificationException;
 import io.veg.engine.ReferentialIntegrityException;
 import io.veg.engine.SchemaViolationException;
 import io.veg.engine.TypeMismatchException;
+import io.veg.engine.UniquenessViolationException;
 import io.veg.model.BootstrapIds;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
+import io.veg.model.PredicateConstraints;
 import io.veg.model.Value;
+import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
 import java.util.ArrayList;
@@ -21,13 +26,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 /**
  * Reference Engine A: straightforward in-memory graph engine backed by standard Java maps.
  *
  * <p>Optimized for semantic clarity and baseline measurement, not memory compactness.
- * All schema elements (object types, value types, predicates, domain/range constraints) are stored
- * as ordinary graph entities and edges atop the minimal {@link BootstrapIds} kernel.</p>
+ * All schema elements (object types, value types, predicates, domain/range/cardinality/uniqueness
+ * constraints, and value mutability) are stored as ordinary graph entities and edges atop the
+ * minimal {@link BootstrapIds} kernel.</p>
  */
 public final class InMemoryGraphEngine implements GraphSession {
 
@@ -38,6 +45,7 @@ public final class InMemoryGraphEngine implements GraphSession {
 
     private final Map<String, EntityId> typeByName = new HashMap<>();
     private final Map<String, EntityId> predicateByName = new HashMap<>();
+    private final Map<EntityId, Map<Value, EntityId>> uniqueValuesByType = new HashMap<>();
 
     private long nextUserEntityId = EntityId.USER_MIN_ID;
     private long nextBootstrapAuxId = 100L;
@@ -47,13 +55,15 @@ public final class InMemoryGraphEngine implements GraphSession {
     }
 
     private void bootstrapKernel() {
-        // Meta-types
+        // Meta-types and system value types
         registerBootstrapType(BootstrapIds.META_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.MetaType");
         registerBootstrapType(BootstrapIds.META_OBJECT_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.ObjectType");
         registerBootstrapType(BootstrapIds.META_VALUE_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.ValueType");
         registerBootstrapType(BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.PredicateType");
         registerBootstrapType(BootstrapIds.META_EDGE_TYPE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.meta.EdgeType");
         registerBootstrapType(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Identifier");
+        registerBootstrapType(BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Int");
+        registerBootstrapType(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Boolean");
 
         // Scalar primitive types
         registerBootstrapType(BootstrapIds.SCALAR_STRING, BootstrapIds.META_TYPE, EntityKind.SCALAR_TYPE, "veg.scalar.String");
@@ -69,23 +79,42 @@ public final class InMemoryGraphEngine implements GraphSession {
         registerBootstrapType(BootstrapIds.ANY_VALUE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.wildcard.AnyValue");
         registerBootstrapType(BootstrapIds.ANY_EDGE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.wildcard.AnyEdge");
 
+        // Mutability markers
+        registerBootstrapType(BootstrapIds.MUTABILITY_IMMUTABLE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.mutability.Immutable");
+        registerBootstrapType(BootstrapIds.MUTABILITY_SHARED_MUTABLE, BootstrapIds.META_TYPE, EntityKind.META_TYPE, "veg.mutability.SharedMutable");
+
         // Meta-predicates
         registerBootstrapPredicate(BootstrapIds.HAS_NAME, "veg.meta.hasName");
         registerBootstrapPredicate(BootstrapIds.HAS_SCALAR_TYPE, "veg.meta.hasScalarType");
         registerBootstrapPredicate(BootstrapIds.HAS_DOMAIN, "veg.meta.hasDomain");
         registerBootstrapPredicate(BootstrapIds.HAS_RANGE, "veg.meta.hasRange");
+        registerBootstrapPredicate(BootstrapIds.HAS_MAX_OUTGOING, "veg.meta.hasMaxOutgoing");
+        registerBootstrapPredicate(BootstrapIds.HAS_MAX_INCOMING, "veg.meta.hasMaxIncoming");
+        registerBootstrapPredicate(BootstrapIds.HAS_UNIQUE_TRIPLE, "veg.meta.hasUniqueTriple");
+        registerBootstrapPredicate(BootstrapIds.HAS_UNIQUE_VALUES, "veg.meta.hasUniqueValues");
+        registerBootstrapPredicate(BootstrapIds.HAS_MUTABILITY, "veg.meta.hasMutability");
 
-        // Attach scalar type edge for SYSTEM_IDENTIFIER_VALUE_TYPE
+        // System value type scalar & uniqueness edges
         insertEdgeInternal(allocateBootstrapAuxId(), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE,
                 BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_STRING);
+        insertEdgeInternal(allocateBootstrapAuxId(), BootstrapIds.SYSTEM_INT_VALUE_TYPE,
+                BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_INT);
+        insertEdgeInternal(allocateBootstrapAuxId(), BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE,
+                BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_BOOLEAN);
 
-        // Attach names and domain/range constraints to all bootstrap schema elements
+        attachBootstrapBooleanFlag(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
+        attachBootstrapBooleanFlag(BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
+        attachBootstrapBooleanFlag(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
+
+        // Attach names to all bootstrap schema elements
         attachBootstrapName(BootstrapIds.META_TYPE, "veg.meta.MetaType");
         attachBootstrapName(BootstrapIds.META_OBJECT_TYPE, "veg.meta.ObjectType");
         attachBootstrapName(BootstrapIds.META_VALUE_TYPE, "veg.meta.ValueType");
         attachBootstrapName(BootstrapIds.META_PREDICATE_TYPE, "veg.meta.PredicateType");
         attachBootstrapName(BootstrapIds.META_EDGE_TYPE, "veg.meta.EdgeType");
         attachBootstrapName(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, "veg.meta.Identifier");
+        attachBootstrapName(BootstrapIds.SYSTEM_INT_VALUE_TYPE, "veg.meta.Int");
+        attachBootstrapName(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, "veg.meta.Boolean");
 
         attachBootstrapName(BootstrapIds.SCALAR_STRING, "veg.scalar.String");
         attachBootstrapName(BootstrapIds.SCALAR_INT, "veg.scalar.Int");
@@ -99,15 +128,29 @@ public final class InMemoryGraphEngine implements GraphSession {
         attachBootstrapName(BootstrapIds.ANY_VALUE, "veg.wildcard.AnyValue");
         attachBootstrapName(BootstrapIds.ANY_EDGE, "veg.wildcard.AnyEdge");
 
+        attachBootstrapName(BootstrapIds.MUTABILITY_IMMUTABLE, "veg.mutability.Immutable");
+        attachBootstrapName(BootstrapIds.MUTABILITY_SHARED_MUTABLE, "veg.mutability.SharedMutable");
+
         attachBootstrapName(BootstrapIds.HAS_NAME, "veg.meta.hasName");
         attachBootstrapName(BootstrapIds.HAS_SCALAR_TYPE, "veg.meta.hasScalarType");
         attachBootstrapName(BootstrapIds.HAS_DOMAIN, "veg.meta.hasDomain");
         attachBootstrapName(BootstrapIds.HAS_RANGE, "veg.meta.hasRange");
+        attachBootstrapName(BootstrapIds.HAS_MAX_OUTGOING, "veg.meta.hasMaxOutgoing");
+        attachBootstrapName(BootstrapIds.HAS_MAX_INCOMING, "veg.meta.hasMaxIncoming");
+        attachBootstrapName(BootstrapIds.HAS_UNIQUE_TRIPLE, "veg.meta.hasUniqueTriple");
+        attachBootstrapName(BootstrapIds.HAS_UNIQUE_VALUES, "veg.meta.hasUniqueValues");
+        attachBootstrapName(BootstrapIds.HAS_MUTABILITY, "veg.meta.hasMutability");
 
-        attachBootstrapDomainRange(BootstrapIds.HAS_NAME, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
-        attachBootstrapDomainRange(BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.META_VALUE_TYPE, BootstrapIds.META_TYPE);
-        attachBootstrapDomainRange(BootstrapIds.HAS_DOMAIN, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.ANY_ENTITY);
-        attachBootstrapDomainRange(BootstrapIds.HAS_RANGE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.ANY_ENTITY);
+        // Attach domain/range/uniqueness constraints to all meta-predicates
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_NAME, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.META_VALUE_TYPE, BootstrapIds.META_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_DOMAIN, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.ANY_ENTITY);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_RANGE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.ANY_ENTITY);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_MAX_OUTGOING, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.SYSTEM_INT_VALUE_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_MAX_INCOMING, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.SYSTEM_INT_VALUE_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_UNIQUE_TRIPLE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_UNIQUE_VALUES, BootstrapIds.META_VALUE_TYPE, BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
+        attachBootstrapPredicateMeta(BootstrapIds.HAS_MUTABILITY, BootstrapIds.ANY_VALUE, BootstrapIds.META_TYPE);
     }
 
     private void registerBootstrapType(EntityId id, EntityId metaTypeId, EntityKind kind, String name) {
@@ -121,19 +164,28 @@ public final class InMemoryGraphEngine implements GraphSession {
     }
 
     private void attachBootstrapName(EntityId targetSchemaId, String name) {
-        EntityId nameValueId = allocateBootstrapAuxId();
-        entities.put(nameValueId, new EntityNode(
-                nameValueId,
-                BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE,
-                EntityKind.VALUE,
-                Optional.of(Value.of(name))
-        ));
+        EntityId nameValueId = insertSystemImmutableValue(
+                allocateBootstrapAuxId(), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, Value.of(name), true);
         insertEdgeInternal(allocateBootstrapAuxId(), targetSchemaId, BootstrapIds.HAS_NAME, nameValueId);
     }
 
-    private void attachBootstrapDomainRange(EntityId predicateId, EntityId domainTypeId, EntityId rangeTypeId) {
+    private void attachBootstrapBooleanFlag(EntityId targetSchemaId, EntityId flagPredicateId, boolean value) {
+        EntityId flagValueId = insertSystemImmutableValue(
+                allocateBootstrapAuxId(), BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, Value.of(value), true);
+        insertEdgeInternal(allocateBootstrapAuxId(), targetSchemaId, flagPredicateId, flagValueId);
+    }
+
+    private void attachBootstrapPredicateMeta(EntityId predicateId, EntityId domainTypeId, EntityId rangeTypeId) {
         insertEdgeInternal(allocateBootstrapAuxId(), predicateId, BootstrapIds.HAS_DOMAIN, domainTypeId);
         insertEdgeInternal(allocateBootstrapAuxId(), predicateId, BootstrapIds.HAS_RANGE, rangeTypeId);
+        attachBootstrapBooleanFlag(predicateId, BootstrapIds.HAS_UNIQUE_TRIPLE, false);
+    }
+
+    private EntityId insertSystemImmutableValue(EntityId id, EntityId systemValueTypeId, Value value, boolean bootstrap) {
+        entities.put(id, new EntityNode(id, systemValueTypeId, EntityKind.VALUE, Optional.of(value)));
+        EntityId mutEdgeId = bootstrap ? allocateBootstrapAuxId() : allocateUserId();
+        insertEdgeInternal(mutEdgeId, id, BootstrapIds.HAS_MUTABILITY, BootstrapIds.MUTABILITY_IMMUTABLE);
+        return id;
     }
 
     private EntityId allocateBootstrapAuxId() {
@@ -156,18 +208,14 @@ public final class InMemoryGraphEngine implements GraphSession {
         }
 
         EntityId typeId = allocateUserId();
-        EntityId nameValueId = allocateUserId();
-        EntityId nameEdgeId = allocateUserId();
-
         entities.put(typeId, new EntityNode(typeId, BootstrapIds.META_OBJECT_TYPE, EntityKind.META_TYPE, Optional.empty()));
-        entities.put(nameValueId, new EntityNode(nameValueId, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, EntityKind.VALUE, Optional.of(Value.of(validName))));
-        insertEdgeInternal(nameEdgeId, typeId, BootstrapIds.HAS_NAME, nameValueId);
+        attachSchemaName(typeId, validName);
         typeByName.put(validName, typeId);
         return typeId;
     }
 
     @Override
-    public EntityId defineValueType(String name, ValueType scalarType) {
+    public EntityId defineValueType(String name, ValueType scalarType, boolean uniqueValues) {
         String validName = requireValidSchemaName(name);
         Objects.requireNonNull(scalarType, "scalarType must not be null");
         if (typeByName.containsKey(validName)) {
@@ -176,23 +224,25 @@ public final class InMemoryGraphEngine implements GraphSession {
 
         EntityId scalarEntityId = BootstrapIds.forValueType(scalarType);
         EntityId typeId = allocateUserId();
-        EntityId nameValueId = allocateUserId();
-        EntityId nameEdgeId = allocateUserId();
-        EntityId scalarEdgeId = allocateUserId();
 
         entities.put(typeId, new EntityNode(typeId, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, Optional.empty()));
-        entities.put(nameValueId, new EntityNode(nameValueId, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, EntityKind.VALUE, Optional.of(Value.of(validName))));
-        insertEdgeInternal(nameEdgeId, typeId, BootstrapIds.HAS_NAME, nameValueId);
-        insertEdgeInternal(scalarEdgeId, typeId, BootstrapIds.HAS_SCALAR_TYPE, scalarEntityId);
+        attachSchemaName(typeId, validName);
+        insertEdgeInternal(allocateUserId(), typeId, BootstrapIds.HAS_SCALAR_TYPE, scalarEntityId);
+        attachSystemMetadataFlag(typeId, BootstrapIds.HAS_UNIQUE_VALUES, Value.of(uniqueValues), BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
+
+        if (uniqueValues) {
+            uniqueValuesByType.put(typeId, new HashMap<>());
+        }
         typeByName.put(validName, typeId);
         return typeId;
     }
 
     @Override
-    public EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId) {
+    public EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId, PredicateConstraints constraints) {
         String validName = requireValidSchemaName(name);
         Objects.requireNonNull(domainTypeId, "domainTypeId must not be null");
         Objects.requireNonNull(rangeTypeId, "rangeTypeId must not be null");
+        Objects.requireNonNull(constraints, "constraints must not be null");
         if (predicateByName.containsKey(validName)) {
             throw new DuplicateSchemaElementException("Predicate already exists: " + validName);
         }
@@ -203,18 +253,34 @@ public final class InMemoryGraphEngine implements GraphSession {
         requireSchemaTypeNode(rangeNode, "rangeTypeId");
 
         EntityId predicateId = allocateUserId();
-        EntityId nameValueId = allocateUserId();
-        EntityId nameEdgeId = allocateUserId();
-        EntityId domainEdgeId = allocateUserId();
-        EntityId rangeEdgeId = allocateUserId();
-
         entities.put(predicateId, new EntityNode(predicateId, BootstrapIds.META_PREDICATE_TYPE, EntityKind.META_TYPE, Optional.empty()));
-        entities.put(nameValueId, new EntityNode(nameValueId, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, EntityKind.VALUE, Optional.of(Value.of(validName))));
-        insertEdgeInternal(nameEdgeId, predicateId, BootstrapIds.HAS_NAME, nameValueId);
-        insertEdgeInternal(domainEdgeId, predicateId, BootstrapIds.HAS_DOMAIN, domainTypeId);
-        insertEdgeInternal(rangeEdgeId, predicateId, BootstrapIds.HAS_RANGE, rangeTypeId);
+        attachSchemaName(predicateId, validName);
+        insertEdgeInternal(allocateUserId(), predicateId, BootstrapIds.HAS_DOMAIN, domainTypeId);
+        insertEdgeInternal(allocateUserId(), predicateId, BootstrapIds.HAS_RANGE, rangeTypeId);
+
+        if (constraints.maxOutgoing().isPresent()) {
+            attachSystemMetadataFlag(predicateId, BootstrapIds.HAS_MAX_OUTGOING,
+                    Value.of((long) constraints.maxOutgoing().getAsInt()), BootstrapIds.SYSTEM_INT_VALUE_TYPE);
+        }
+        if (constraints.maxIncoming().isPresent()) {
+            attachSystemMetadataFlag(predicateId, BootstrapIds.HAS_MAX_INCOMING,
+                    Value.of((long) constraints.maxIncoming().getAsInt()), BootstrapIds.SYSTEM_INT_VALUE_TYPE);
+        }
+        attachSystemMetadataFlag(predicateId, BootstrapIds.HAS_UNIQUE_TRIPLE,
+                Value.of(constraints.uniqueTriple()), BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE);
+
         predicateByName.put(validName, predicateId);
         return predicateId;
+    }
+
+    private void attachSchemaName(EntityId targetSchemaId, String name) {
+        attachSystemMetadataFlag(targetSchemaId, BootstrapIds.HAS_NAME,
+                Value.of(name), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
+    }
+
+    private void attachSystemMetadataFlag(EntityId targetSchemaId, EntityId predicateId, Value value, EntityId systemValueTypeId) {
+        EntityId valueNodeId = insertSystemImmutableValue(allocateUserId(), systemValueTypeId, value, false);
+        insertEdgeInternal(allocateUserId(), targetSchemaId, predicateId, valueNodeId);
     }
 
     @Override
@@ -231,9 +297,10 @@ public final class InMemoryGraphEngine implements GraphSession {
     }
 
     @Override
-    public EntityId createValue(EntityId valueTypeId, Value value) {
+    public EntityId createValue(EntityId valueTypeId, Value value, ValueMutability mutability) {
         Objects.requireNonNull(valueTypeId, "valueTypeId must not be null");
         Objects.requireNonNull(value, "value must not be null");
+        Objects.requireNonNull(mutability, "mutability must not be null");
 
         EntityNode typeNode = requireEntityExists(valueTypeId, "valueTypeId");
         if (!BootstrapIds.META_VALUE_TYPE.equals(typeNode.typeId())) {
@@ -247,9 +314,69 @@ public final class InMemoryGraphEngine implements GraphSession {
                             + ": expected " + expectedScalarType + " but got " + value.valueType());
         }
 
+        if (isUniqueValueType(valueTypeId)) {
+            Map<Value, EntityId> existingIndex = uniqueValuesByType.get(valueTypeId);
+            if (existingIndex != null && existingIndex.containsKey(value)) {
+                throw new UniquenessViolationException(
+                        "Duplicate value for unique value type " + describeId(valueTypeId) + ": " + value);
+            }
+        }
+
         EntityId id = allocateUserId();
         entities.put(id, new EntityNode(id, valueTypeId, EntityKind.VALUE, Optional.of(value)));
+        insertEdgeInternal(allocateUserId(), id, BootstrapIds.HAS_MUTABILITY, BootstrapIds.forValueMutability(mutability));
+
+        if (isUniqueValueType(valueTypeId)) {
+            uniqueValuesByType.computeIfAbsent(valueTypeId, ignored -> new HashMap<>()).put(value, id);
+        }
         return id;
+    }
+
+    @Override
+    public void updateValue(EntityId valueEntityId, Value newValue) {
+        Objects.requireNonNull(valueEntityId, "valueEntityId must not be null");
+        Objects.requireNonNull(newValue, "newValue must not be null");
+
+        EntityNode existingNode = requireEntityExists(valueEntityId, "valueEntityId");
+        if (existingNode.kind() != EntityKind.VALUE) {
+            throw new TypeMismatchException("Entity " + valueEntityId + " is not a VALUE entity, was: " + existingNode.kind());
+        }
+        if (valueEntityId.isBootstrap() || existingNode.typeId().isBootstrap()) {
+            throw new ImmutableValueModificationException("Cannot mutate internal bootstrap/schema value entity: " + valueEntityId);
+        }
+
+        ValueMutability mutability = resolveValueMutability(valueEntityId).orElse(ValueMutability.IMMUTABLE);
+        if (mutability != ValueMutability.SHARED_MUTABLE) {
+            throw new ImmutableValueModificationException(
+                    "Cannot update immutable value entity " + valueEntityId + " (mutability=" + mutability + ")");
+        }
+
+        ValueType expectedScalarType = resolveScalarTypeFromGraph(existingNode.typeId());
+        if (expectedScalarType != newValue.valueType()) {
+            throw new TypeMismatchException(
+                    "Type mismatch for value entity " + valueEntityId + ": expected "
+                            + expectedScalarType + " but got " + newValue.valueType());
+        }
+
+        boolean unique = isUniqueValueType(existingNode.typeId());
+        if (unique) {
+            Map<Value, EntityId> index = uniqueValuesByType.get(existingNode.typeId());
+            if (index != null) {
+                EntityId conflictingOwner = index.get(newValue);
+                if (conflictingOwner != null && !conflictingOwner.equals(valueEntityId)) {
+                    throw new UniquenessViolationException(
+                            "Cannot update value entity " + valueEntityId + " to duplicate unique value " + newValue);
+                }
+            }
+        }
+
+        Value oldValue = existingNode.payload().orElseThrow();
+        entities.put(valueEntityId, new EntityNode(valueEntityId, existingNode.typeId(), EntityKind.VALUE, Optional.of(newValue)));
+        if (unique && !oldValue.equals(newValue)) {
+            Map<Value, EntityId> index = uniqueValuesByType.computeIfAbsent(existingNode.typeId(), ignored -> new HashMap<>());
+            index.remove(oldValue);
+            index.put(newValue, valueEntityId);
+        }
     }
 
     @Override
@@ -281,6 +408,35 @@ public final class InMemoryGraphEngine implements GraphSession {
                     "Target entity " + targetId + " (type " + describeNodeType(targetNode)
                             + ") violates range constraint " + describeId(rangeConstraint)
                             + " of predicate " + describeId(predicateId));
+        }
+
+        PredicateConstraints constraints = resolvePredicateConstraints(predicateId)
+                .orElse(PredicateConstraints.unconstrained());
+
+        List<Edge> existingOutgoing = findOutgoingEdges(sourceId, predicateId);
+        if (constraints.uniqueTriple()) {
+            for (Edge existing : existingOutgoing) {
+                if (existing.targetId().equals(targetId)) {
+                    throw new UniquenessViolationException(
+                            "Duplicate triple prohibited for predicate " + describeId(predicateId)
+                                    + ": (" + sourceId + ", " + predicateId + ", " + targetId + ")");
+                }
+            }
+        }
+
+        if (constraints.maxOutgoing().isPresent() && existingOutgoing.size() >= constraints.maxOutgoing().getAsInt()) {
+            throw new CardinalityViolationException(
+                    "Max outgoing cardinality (" + constraints.maxOutgoing().getAsInt() + ") exceeded for "
+                            + sourceId + " on predicate " + describeId(predicateId));
+        }
+
+        if (constraints.maxIncoming().isPresent()) {
+            List<Edge> existingIncoming = findIncomingEdges(targetId, predicateId);
+            if (existingIncoming.size() >= constraints.maxIncoming().getAsInt()) {
+                throw new CardinalityViolationException(
+                        "Max incoming cardinality (" + constraints.maxIncoming().getAsInt() + ") exceeded for "
+                                + targetId + " on predicate " + describeId(predicateId));
+            }
         }
 
         EntityId edgeId = allocateUserId();
@@ -360,6 +516,43 @@ public final class InMemoryGraphEngine implements GraphSession {
     }
 
     @Override
+    public Optional<ValueMutability> resolveValueMutability(EntityId valueEntityId) {
+        Objects.requireNonNull(valueEntityId, "valueEntityId must not be null");
+        EntityNode node = entities.get(valueEntityId);
+        if (node == null || node.kind() != EntityKind.VALUE) {
+            return Optional.empty();
+        }
+        List<Edge> mutEdges = findOutgoingEdges(valueEntityId, BootstrapIds.HAS_MUTABILITY);
+        if (mutEdges.isEmpty()) {
+            return Optional.empty();
+        }
+        return BootstrapIds.toValueMutability(mutEdges.getFirst().targetId());
+    }
+
+    @Override
+    public Optional<PredicateConstraints> resolvePredicateConstraints(EntityId predicateId) {
+        Objects.requireNonNull(predicateId, "predicateId must not be null");
+        EntityNode node = entities.get(predicateId);
+        if (node == null || !BootstrapIds.META_PREDICATE_TYPE.equals(node.typeId())) {
+            return Optional.empty();
+        }
+        OptionalInt maxOut = resolveOptionalIntFlag(predicateId, BootstrapIds.HAS_MAX_OUTGOING);
+        OptionalInt maxIn = resolveOptionalIntFlag(predicateId, BootstrapIds.HAS_MAX_INCOMING);
+        boolean uniqueTriple = resolveBooleanFlag(predicateId, BootstrapIds.HAS_UNIQUE_TRIPLE);
+        return Optional.of(new PredicateConstraints(maxOut, maxIn, uniqueTriple));
+    }
+
+    @Override
+    public boolean isUniqueValueType(EntityId valueTypeId) {
+        Objects.requireNonNull(valueTypeId, "valueTypeId must not be null");
+        EntityNode node = entities.get(valueTypeId);
+        if (node == null || !BootstrapIds.META_VALUE_TYPE.equals(node.typeId())) {
+            return false;
+        }
+        return resolveBooleanFlag(valueTypeId, BootstrapIds.HAS_UNIQUE_VALUES);
+    }
+
+    @Override
     public List<Edge> findOutgoingEdges(EntityId sourceId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
         List<Edge> list = outgoingEdges.get(sourceId);
@@ -436,6 +629,29 @@ public final class InMemoryGraphEngine implements GraphSession {
         }
     }
 
+    private OptionalInt resolveOptionalIntFlag(EntityId sourceId, EntityId flagPredicateId) {
+        List<Edge> flagEdges = findOutgoingEdges(sourceId, flagPredicateId);
+        if (flagEdges.isEmpty()) {
+            return OptionalInt.empty();
+        }
+        EntityNode flagNode = entities.get(flagEdges.getFirst().targetId());
+        if (flagNode != null && flagNode.payload().isPresent()
+                && flagNode.payload().get() instanceof Value.IntValue(long val)) {
+            return OptionalInt.of(Math.toIntExact(val));
+        }
+        return OptionalInt.empty();
+    }
+
+    private boolean resolveBooleanFlag(EntityId sourceId, EntityId flagPredicateId) {
+        List<Edge> flagEdges = findOutgoingEdges(sourceId, flagPredicateId);
+        if (flagEdges.isEmpty()) {
+            return false;
+        }
+        EntityNode flagNode = entities.get(flagEdges.getFirst().targetId());
+        return flagNode != null && flagNode.payload().isPresent()
+                && flagNode.payload().get() instanceof Value.BooleanValue(boolean val) && val;
+    }
+
     private String requireValidSchemaName(String name) {
         if (name == null || name.isBlank()) {
             throw new SchemaViolationException("Schema element name must not be null or blank");
@@ -495,7 +711,12 @@ public final class InMemoryGraphEngine implements GraphSession {
         return BootstrapIds.HAS_NAME.equals(predicateId)
                 || BootstrapIds.HAS_SCALAR_TYPE.equals(predicateId)
                 || BootstrapIds.HAS_DOMAIN.equals(predicateId)
-                || BootstrapIds.HAS_RANGE.equals(predicateId);
+                || BootstrapIds.HAS_RANGE.equals(predicateId)
+                || BootstrapIds.HAS_MAX_OUTGOING.equals(predicateId)
+                || BootstrapIds.HAS_MAX_INCOMING.equals(predicateId)
+                || BootstrapIds.HAS_UNIQUE_TRIPLE.equals(predicateId)
+                || BootstrapIds.HAS_UNIQUE_VALUES.equals(predicateId)
+                || BootstrapIds.HAS_MUTABILITY.equals(predicateId);
     }
 
     private String describeNodeType(EntityNode node) {

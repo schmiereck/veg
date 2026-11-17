@@ -55,3 +55,53 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
   1. Differenzierender Test zwischen *unveränderlichem Shared Value* vs. *explizit gemeinsam veränderbarer Attribut-Entity* (Shared Mutation Policy).
   2. Test- und Kostenvergleich **Option A** (`Connection + Assertions`) vs. **Option B** (`Edge = Assertion`, siehe [ADR-0001](adr/0001-semantic-assertions-on-relations.md)) bei konkurrierenden Aussagen zweier Quellen zwischen denselben Entitäten.
   3. Einführung von Kardinalitäts- und Uniqueness-Constraints auf Prädikaten als Graph-Daten.
+
+---
+
+## Eintrag 02 — Stufe 2: Identität, Sharing, Kardinalität & Assertion-Modell-Vergleich
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 2** / **Hypothesen H2 & H3**:  
+  1. Explizite Trennung von `ValueMutability.IMMUTABLE` (Default) und `ValueMutability.SHARED_MUTABLE` verhindert versehentliche globale Seiteneffekte bei geteilten Attribut-Entities, erlaubt aber bewusste gemeinsame Updates.  
+  2. Option B (`Edge = Assertion`) spart gegenüber Option A (`Connection + Assertions`) sowohl Speicher als auch Latenz, ohne Ausdrucksstärke für konkurrierende Aussagen, `weight` ≠ `confidence` und Provenienz einzubüßen.
+
+- **Implementiert:**  
+  - `veg-model`: `ValueMutability`, `PredicateConstraints` (`unconstrained`, `uniqueSet`, `manyToOne`, `oneToMany`, `oneToOne`), Erweiterung von `BootstrapIds` (`SYSTEM_INT_VALUE_TYPE`, `SYSTEM_BOOLEAN_VALUE_TYPE`, `HAS_MAX_OUTGOING`, `HAS_MAX_INCOMING`, `HAS_UNIQUE_TRIPLE`, `HAS_UNIQUE_VALUES`, `HAS_MUTABILITY`, `MUTABILITY_*`).
+  - `veg-engine-api`: `ImmutableValueModificationException`, `CardinalityViolationException`, `UniquenessViolationException`, erweiterte Methoden auf `GraphReader` und `GraphSession` (`defineValueType(..., uniqueValues)`, `definePredicate(..., constraints)`, `createValue(..., mutability)`, `updateValue(...)`).
+  - `veg-engine-memory`: Durchsetzung von `ValueMutability`, eindeutigen Werttypen (`uniqueValues`), `PredicateConstraints` sowie atomare Ablehnung von Verstößen in `InMemoryGraphEngine`.
+  - `veg-test-fixtures`: `Stage2ContractTestSuite` + erweiterte `GraphInvariantsProperties`.
+  - `veg-benchmarks` & `veg-cli`: `AssertionModelComparisonRunner` und CLI-Kommando `assertion-experiment`.
+  - Dokumentation: Aktualisierung von [ADR-0001](adr/0001-semantic-assertions-on-relations.md), neu [ADR-0003](adr/0003-shared-value-mutation-and-cardinality.md), Erweiterung von [INVARIANTS.md](INVARIANTS.md) (`I-09`, `I-10`), [GLOSSARY.md](GLOSSARY.md), [ARCHITECTURE.md](ARCHITECTURE.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **24 / 24 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model` (`ModelPrimitivesTest`): 6 / 6 bestanden
+  - `veg-engine-memory`: 13 / 13 bestanden (`InMemoryStage1ContractTest` 6, `InMemoryStage2ContractTest` 5, `GraphInvariantsProperties` 2 mit `jqwik` `tries = 40`)
+  - `veg-benchmarks` (`AssertionModelComparisonRunnerTest`, `BaselineBenchmarkRunnerTest`): 2 / 2 bestanden
+  - `veg-cli` (`VegCliMainTest`): 3 / 3 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  Befehl:  
+  `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment --pairs 5000 --seed 42 --densities 1,2,5 --warmup 1 --iterations 3 --queries 1000 --output docs/experiments/stage2-assertions/results.csv --json docs/experiments/stage2-assertions/results.json`  
+  Rohdaten: [results.csv](experiments/stage2-assertions/results.csv), [results.json](experiments/stage2-assertions/results.json), Detailanalyse: [analysis.md](experiments/stage2-assertions/analysis.md).  
+  Kernergebnisse (Iteration 3, warm):
+  - **k = 1:** Option B spart **~33 % Heap/Aussage** (`2.221,70 B` vs. `3.304,31 B`) und ist bei Abfragen **~2,2× schneller** (`900 ns` vs. `2.000 ns` p50).
+  - **k = 2:** Option B spart **~29 % Heap/Aussage** (`2.109,80 B` vs. `2.961,26 B`) und schreibt **~2,8× schneller** (`357.283` vs. `127.276 assert/s`).
+  - **k = 5:** Option B bleibt **~19 % kompakter** (`2.167,96 B` vs. `2.670,76 B`) bei **~41 % niedrigerer p50-Abfragelatenz** (`1.900 ns` vs. `3.200 ns`).
+  - **Semantische Äquivalenz:** Beide Modelle liefern in jedem Lauf identische Treffer (`142`, `130`, `406`).
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt (`H2`):** Explizite Mutability-Semantik (`IMMUTABLE` vs. `SHARED_MUTABLE`) schützt geteilte Attribute sicher und bleibt konsistent mit eindeutigen Werttypen.
+  - **Bestätigt (`H3` / `ADR-0001`):** `Edge = Assertion` schlägt `Connection + Assertions` über alle untersuchten Aussagedichten (`k = 1, 2, 5`).
+
+- **Risiken und technische Schulden:**  
+  1. Das Speichern einer expliziten `HAS_MUTABILITY`-Kante pro `VALUE`-Knoten erhöht den Entity-/Edge-Footprint in Engine A spürbar (in Stufe 7 in Engine B/C als kompaktes Bit-Flag im Entity-Header komprimierbar).
+  2. Prädikate unterstützen noch keine Vererbung (`subPropertyOf` / Typvererbung `M-06`).
+  3. Transaktionen, atomare Commits und historische Snapshots fehlen noch — aktuell mutiert `updateValue` / `disconnect` direkt im Live-Zustand.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** mit Stufe 3. Option B (`Edge = Assertion`) und `ValueMutability` sind für den versionierten Kern freigegeben.
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 3):**  
+  Einführung von Transaktions-Workspaces, Savepoints und unveränderlichen linearen Commits (`CommitId`, Parent, Actor, Reason, Timestamp) inklusive `asOf(commitId)`, `history(entityId)`, `diff(commitA, commitB)`, `revert(commitId)` sowie den Tests `T05`–`T09` und `T15` (Replay über 1.000 deterministische Mutationen).

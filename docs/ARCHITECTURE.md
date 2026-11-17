@@ -1,4 +1,4 @@
-# Architektur — Stand Stufe 0 & Stufe 1
+# Architektur — Stand Stufe 0 bis Stufe 2
 
 ## 1. Schichtenmodell & Modulabhängigkeiten
 
@@ -21,21 +21,24 @@ flowchart LR
 
 ---
 
-## 2. Wie sich das Schema selbst beschreibt (Stufe 1)
+## 2. Wie sich das Schema selbst beschreibt (Stufe 1 & Stufe 2)
 
-Statt Typdefinitionen nur in separaten Java-Metaklassen zu verstecken, speichert `InMemoryGraphEngine` fachliche Typen **im selben Graph**:
+Statt Typdefinitionen nur in separaten Java-Metaklassen zu verstecken, speichert `InMemoryGraphEngine` fachliche Typen und Constraints **im selben Graph**:
 
 - `defineObjectType("Person")` erzeugt:
   1. `EntityNode(#1000, META_OBJECT_TYPE, META_TYPE, empty)`
-  2. `EntityNode(#1001, SYSTEM_IDENTIFIER_VALUE_TYPE, VALUE, "Person")`
+  2. `EntityNode(#1001, SYSTEM_IDENTIFIER_VALUE_TYPE, VALUE, "Person")` (inkl. `HAS_MUTABILITY -> MUTABILITY_IMMUTABLE`)
   3. `Edge(#1002, #1000, HAS_NAME, #1001)` (+ `EntityNode(#1002, META_EDGE_TYPE, EDGE, empty)`)
-- `defineValueType("FirstName", ValueType.STRING)` erzeugt zusätzlich:
+- `defineValueType("FirstName", ValueType.STRING, uniqueValues)` erzeugt zusätzlich:
   - `Edge(#..., #firstNameType, HAS_SCALAR_TYPE, BootstrapIds.SCALAR_STRING)`
-- `definePredicate("hasFirstName", personType, firstNameType)` erzeugt zusätzlich:
+  - `Edge(#..., #firstNameType, HAS_UNIQUE_VALUES, BooleanValue(uniqueValues))`
+- `definePredicate("hasFirstName", personType, firstNameType, constraints)` erzeugt zusätzlich:
   - `Edge(#..., #hasFirstName, HAS_DOMAIN, personType)`
   - `Edge(#..., #hasFirstName, HAS_RANGE, firstNameType)`
+  - optional `HAS_MAX_OUTGOING`, `HAS_MAX_INCOMING` sowie `HAS_UNIQUE_TRIPLE`
+- `createValue(valueTypeId, value, mutability)` speichert am Wertknoten explizit `HAS_MUTABILITY -> MUTABILITY_IMMUTABLE` oder `MUTABILITY_SHARED_MUTABLE`.
 
-Bei jedem `createValue(...)` und `connect(...)` liest die Engine die geltenden `HAS_SCALAR_TYPE`-, `HAS_DOMAIN`- und `HAS_RANGE`-Kanten direkt aus dem Graph.
+Bei jedem `createValue(...)`, `updateValue(...)` und `connect(...)` liest die Engine diese Schema-, Mutability- und Kardinalitätskanten direkt aus dem Graph (mit einem O(1)-Sekundärindex für `uniqueValues`).
 
 ---
 

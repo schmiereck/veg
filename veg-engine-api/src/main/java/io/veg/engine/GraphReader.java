@@ -3,6 +3,8 @@ package io.veg.engine;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.PredicateConstraints;
+import io.veg.model.ValueMutability;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,6 +26,12 @@ public interface GraphReader {
     Optional<EntityId> findPredicateByName(String name);
 
     Optional<String> resolveName(EntityId schemaEntityId);
+
+    Optional<ValueMutability> resolveValueMutability(EntityId valueEntityId);
+
+    Optional<PredicateConstraints> resolvePredicateConstraints(EntityId predicateId);
+
+    boolean isUniqueValueType(EntityId valueTypeId);
 
     List<Edge> findOutgoingEdges(EntityId sourceId);
 

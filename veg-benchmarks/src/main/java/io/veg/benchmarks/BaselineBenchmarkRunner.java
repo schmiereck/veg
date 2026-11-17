@@ -8,8 +8,6 @@ import io.veg.model.Edge;
 import io.veg.model.EntityId;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -106,12 +104,12 @@ public final class BaselineBenchmarkRunner {
               .append("heap_delta_bytes,approx_bytes_per_entity,approx_bytes_per_edge\n");
 
             for (IterationResult r : iterations) {
-                sb.append(csvEscape(environment.timestampUtc())).append(',')
-                  .append(csvEscape(environment.engineName())).append(',')
-                  .append(csvEscape(environment.javaVersion())).append(',')
-                  .append(csvEscape(environment.jvmName())).append(',')
-                  .append(csvEscape(environment.osName())).append(',')
-                  .append(csvEscape(environment.osArch())).append(',')
+                sb.append(BenchmarkMetricsSupport.csvEscape(environment.timestampUtc())).append(',')
+                  .append(BenchmarkMetricsSupport.csvEscape(environment.engineName())).append(',')
+                  .append(BenchmarkMetricsSupport.csvEscape(environment.javaVersion())).append(',')
+                  .append(BenchmarkMetricsSupport.csvEscape(environment.jvmName())).append(',')
+                  .append(BenchmarkMetricsSupport.csvEscape(environment.osName())).append(',')
+                  .append(BenchmarkMetricsSupport.csvEscape(environment.osArch())).append(',')
                   .append(environment.processors()).append(',')
                   .append(environment.maxHeapBytes()).append(',')
                   .append(config.seed()).append(',')
@@ -142,12 +140,12 @@ public final class BaselineBenchmarkRunner {
             StringBuilder sb = new StringBuilder();
             sb.append("{\n");
             sb.append("  \"environment\": {\n");
-            sb.append("    \"timestampUtc\": ").append(jsonString(environment.timestampUtc())).append(",\n");
-            sb.append("    \"engineName\": ").append(jsonString(environment.engineName())).append(",\n");
-            sb.append("    \"javaVersion\": ").append(jsonString(environment.javaVersion())).append(",\n");
-            sb.append("    \"jvmName\": ").append(jsonString(environment.jvmName())).append(",\n");
-            sb.append("    \"osName\": ").append(jsonString(environment.osName())).append(",\n");
-            sb.append("    \"osArch\": ").append(jsonString(environment.osArch())).append(",\n");
+            sb.append("    \"timestampUtc\": ").append(BenchmarkMetricsSupport.jsonString(environment.timestampUtc())).append(",\n");
+            sb.append("    \"engineName\": ").append(BenchmarkMetricsSupport.jsonString(environment.engineName())).append(",\n");
+            sb.append("    \"javaVersion\": ").append(BenchmarkMetricsSupport.jsonString(environment.javaVersion())).append(",\n");
+            sb.append("    \"jvmName\": ").append(BenchmarkMetricsSupport.jsonString(environment.jvmName())).append(",\n");
+            sb.append("    \"osName\": ").append(BenchmarkMetricsSupport.jsonString(environment.osName())).append(",\n");
+            sb.append("    \"osArch\": ").append(BenchmarkMetricsSupport.jsonString(environment.osArch())).append(",\n");
             sb.append("    \"processors\": ").append(environment.processors()).append(",\n");
             sb.append("    \"maxHeapBytes\": ").append(environment.maxHeapBytes()).append("\n");
             sb.append("  },\n");
@@ -216,7 +214,8 @@ public final class BaselineBenchmarkRunner {
 
         List<IterationResult> results = new ArrayList<>(config.measuredIterations());
         for (int iter = 1; iter <= config.measuredIterations(); iter++) {
-            long heapBefore = settledUsedHeapBytes();
+            sink = null;
+            long heapBefore = BenchmarkMetricsSupport.settledUsedHeapBytes();
 
             GraphSession session = sessionFactory.get();
             long startNs = System.nanoTime();
@@ -230,7 +229,7 @@ public final class BaselineBenchmarkRunner {
             long writeElapsedNs = System.nanoTime() - startNs;
 
             sink = session;
-            long heapAfter = settledUsedHeapBytes();
+            long heapAfter = BenchmarkMetricsSupport.settledUsedHeapBytes();
             long heapDelta = Math.max(0L, heapAfter - heapBefore);
 
             long[] oneHopLatencies = measureOneHopReads(session, dataset, config.seed() + iter, config.readSampleQueries());
@@ -252,12 +251,12 @@ public final class BaselineBenchmarkRunner {
                     dataset.domainOperationsCount(),
                     writeMs,
                     writeOpsPerSec,
-                    percentile(oneHopLatencies, 0.50),
-                    percentile(oneHopLatencies, 0.95),
-                    percentile(oneHopLatencies, 0.99),
-                    percentile(twoHopLatencies, 0.50),
-                    percentile(twoHopLatencies, 0.95),
-                    percentile(twoHopLatencies, 0.99),
+                    BenchmarkMetricsSupport.percentile(oneHopLatencies, 0.50),
+                    BenchmarkMetricsSupport.percentile(oneHopLatencies, 0.95),
+                    BenchmarkMetricsSupport.percentile(oneHopLatencies, 0.99),
+                    BenchmarkMetricsSupport.percentile(twoHopLatencies, 0.50),
+                    BenchmarkMetricsSupport.percentile(twoHopLatencies, 0.95),
+                    BenchmarkMetricsSupport.percentile(twoHopLatencies, 0.99),
                     heapDelta,
                     bytesPerEntity,
                     bytesPerEdge
@@ -268,19 +267,11 @@ public final class BaselineBenchmarkRunner {
     }
 
     public static void writeReportCsv(BenchmarkReport report, Path outputPath) throws IOException {
-        Path parent = outputPath.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Files.writeString(outputPath, report.toCsv(), StandardCharsets.UTF_8);
+        BenchmarkMetricsSupport.writeUtf8File(outputPath, report.toCsv());
     }
 
     public static void writeReportJson(BenchmarkReport report, Path outputPath) throws IOException {
-        Path parent = outputPath.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Files.writeString(outputPath, report.toJson(), StandardCharsets.UTF_8);
+        BenchmarkMetricsSupport.writeUtf8File(outputPath, report.toJson());
     }
 
     private long executeReadQueries(GraphSession session, GeneratedDataset dataset, long seed, int count) {
@@ -343,51 +334,5 @@ public final class BaselineBenchmarkRunner {
         sink = checksum;
         Arrays.sort(latencies);
         return latencies;
-    }
-
-    private static long percentile(long[] sorted, double p) {
-        if (sorted.length == 0) {
-            return 0L;
-        }
-        int index = (int) Math.ceil(p * sorted.length) - 1;
-        int clamped = Math.max(0, Math.min(sorted.length - 1, index));
-        return sorted[clamped];
-    }
-
-    private static long settledUsedHeapBytes() {
-        Runtime runtime = Runtime.getRuntime();
-        for (int i = 0; i < 2; i++) {
-            System.gc();
-            try {
-                Thread.sleep(30);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            }
-        }
-        return runtime.totalMemory() - runtime.freeMemory();
-    }
-
-    private static String csvEscape(String raw) {
-        if (raw.contains(",") || raw.contains("\"") || raw.contains("\n")) {
-            return '"' + raw.replace("\"", "\"\"") + '"';
-        }
-        return raw;
-    }
-
-    private static String jsonString(String raw) {
-        StringBuilder sb = new StringBuilder("\"");
-        for (int i = 0; i < raw.length(); i++) {
-            char c = raw.charAt(i);
-            switch (c) {
-                case '"' -> sb.append("\\\"");
-                case '\\' -> sb.append("\\\\");
-                case '\n' -> sb.append("\\n");
-                case '\r' -> sb.append("\\r");
-                case '\t' -> sb.append("\\t");
-                default -> sb.append(c);
-            }
-        }
-        return sb.append('"').toString();
     }
 }

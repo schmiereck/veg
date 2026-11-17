@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -74,5 +75,24 @@ class ModelPrimitivesTest {
             assertThat(BootstrapIds.toValueType(scalarId)).contains(type);
         }
         assertThat(BootstrapIds.toValueType(BootstrapIds.META_TYPE)).isEmpty();
+    }
+
+    @Test
+    void bootstrapMutabilityMappingsAndPredicateConstraintsValidateBounds() {
+        for (ValueMutability mutability : ValueMutability.values()) {
+            EntityId markerId = BootstrapIds.forValueMutability(mutability);
+            assertThat(markerId.isBootstrap()).isTrue();
+            assertThat(BootstrapIds.toValueMutability(markerId)).contains(mutability);
+        }
+        assertThat(BootstrapIds.toValueMutability(BootstrapIds.META_TYPE)).isEmpty();
+
+        assertThat(PredicateConstraints.unconstrained())
+                .isEqualTo(new PredicateConstraints(OptionalInt.empty(), OptionalInt.empty(), false));
+        assertThat(PredicateConstraints.oneToOne())
+                .isEqualTo(new PredicateConstraints(OptionalInt.of(1), OptionalInt.of(1), true));
+        assertThatThrownBy(() -> new PredicateConstraints(OptionalInt.of(0), OptionalInt.empty(), false))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PredicateConstraints(OptionalInt.empty(), OptionalInt.of(-1), false))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

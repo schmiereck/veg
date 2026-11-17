@@ -19,7 +19,7 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 | [`veg-engine-memory`](veg-engine-memory) | Referenz-Engine **A** (In-Memory Maps) mit strenger atomarer Typ- und Constraint-Prüfung |
 | [`veg-test-fixtures`](veg-test-fixtures) | Backend-agnostische Contract-Tests (`T01`–`T04`) und deterministischer Graph-Generator (`P-02`) |
 | [`veg-benchmarks`](veg-benchmarks) | Reproduzierbarer Benchmark-Harness mit CSV-/JSON-Export & JVM-Telemetrie |
-| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `benchmark`) |
+| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `benchmark`, `assertion-experiment`) |
 | [`docs`](docs) | Konzept, Glossar, Invarianten, Architektur, ADRs, Laborbuch (`RESEARCH_LOG.md`) & Experimente |
 
 ---
@@ -51,6 +51,12 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo
 # Reproduzierbarer Baseline-Benchmark (10.000 Personen, Seed 42)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar benchmark `
   --entities 10000 --seed 42 --output docs/experiments/stage0-baseline/results.csv
+
+# Stage-2 Assertion-Modell-Vergleich (Option A vs. Option B)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
+  --pairs 5000 --seed 42 --densities 1,2,5 `
+  --output docs/experiments/stage2-assertions/results.csv `
+  --json docs/experiments/stage2-assertions/results.json
 ```
 
 ---
@@ -59,7 +65,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar benchmark `
 
 - [x] **Stufe 0:** Repository, Maven-Multi-Modul-Setup (Java 25 LTS), CI-Pipeline, Test-Oracle & Baseline-Benchmark-Harness
 - [x] **Stufe 1:** Minimalgraph (`EntityId`, `Value`, `Edge`), Bootstrap-Kern im Graph, strenge Typprüfung, `T01`–`T04` & `ADR-0001`/`0002`
-- [ ] **Stufe 2:** Identität vs. Wertgleichheit, Shared-Value-Semantik, `Connection + Assertions` vs. `Edge = Assertion`, Kardinalitäten
+- [x] **Stufe 2:** Identität vs. Wertgleichheit, Shared-Value-Semantik (`IMMUTABLE`/`SHARED_MUTABLE`), Kardinalitäten & `Connection + Assertions` vs. `Edge = Assertion` (`ADR-0003`)
 - [ ] **Stufe 3:** Atomare Transaktionen, Savepoints, unveränderlicher Commit-DAG, `asOf`, `diff`, `revert` (`T05`–`T09`, `T15`)
 - [ ] **Stufe 4:** Branches mit struktureller Teilung (`T16`), selektives Staging & 3-Wege-Merge (`T10`–`T12`)
 - [ ] **Stufe 5:** Versionsbewusste Berechtigungen (Entity/Relation/Attribut, `T13`–`T14`) & abgeleitete Aussagen
@@ -78,6 +84,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar benchmark `
 - [Architektur & Austauschbarkeit für Stufe 3/4](docs/ARCHITECTURE.md)
 - [ADR-0001: Semantische Aussagen auf Relationen](docs/adr/0001-semantic-assertions-on-relations.md)
 - [ADR-0002: Grenzen des Bootstrap-Kerns](docs/adr/0002-bootstrap-kernel-boundaries.md)
+- [ADR-0003: Shared-Value-Mutabilität, Uniqueness und Kardinalitäten](docs/adr/0003-shared-value-mutation-and-cardinality.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 
 ## Lizenz

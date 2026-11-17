@@ -1,7 +1,7 @@
 # Versioned Entity Graph (VEG) — Aktives R&D-Konzept
 
 > **Basisdokument:** [../doc/Versioned_Entity_Graph_RnD_Konzept.md](../doc/Versioned_Entity_Graph_RnD_Konzept.md) (Stand 17. November 2026)  
-> **Aktueller Status:** Stufe 0 und Stufe 1 umgesetzt; Fokus auf eigenständiger nativer Engine in **Java 25 LTS**.
+> **Aktueller Status:** Stufen 0, 1 und 2 umgesetzt; Fokus auf eigenständiger nativer Engine in **Java 25 LTS**.
 
 ## Verbindliche Präzisierungen gegenüber dem Ursprungskonzept
 

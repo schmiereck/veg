@@ -1,6 +1,6 @@
 # ADR-0001: Modellierung semantischer Aussagen auf Relationen
 
-- **Status:** Akzeptiert für Stufe 1; vergleichendes Experiment für Stufe 2 geplant
+- **Status:** Bestätigt und experimentell validiert (Stufe 2)
 - **Datum:** 2026-11-17
 - **Kontext:** Hypothese `H3`, Anforderungen `M-02`, `M-10`, `M-11`, `S-07`
 
@@ -51,9 +51,12 @@ Wir implementieren **Option B** als Fundament für Stufe 1:
 - Jede `Edge` ist eine eigenständige Entity (`EntityKind.EDGE`) mit eigener `EntityId`.
 - Aussagen-Metadaten wie `supportedBy(ANY_EDGE -> SourceDocument)` und `hasConfidence(ANY_EDGE -> Confidence)` werden als reguläre ausgehende Kanten dieser `Edge` modelliert (verifiziert in Test `T04`).
 
-## Kriterien für Revision in Stufe 2
+## Ergebnis des Vergleichsexperiments (Stufe 2)
 
-In **Stufe 2** bauen wir einen gezielten Vergleichs- und Differenzierungstest für:
-1. Mehrfach-Aussagen derselben Quelle vs. verschiedener Quellen zwischen `(A, B)` (`worksOn` aus Quelle 1 mit `confidence=0.9`, `worksOn` aus Quelle 2 mit `confidence=0.4`).
-2. Kostenvergleich (Entities/Edges pro Aussage) und Merge-Verhalten beim parallelen Hinzufügen von Provenienz.
-Falls sich zeigt, dass echte Multi-Assertion-Gruppierung häufiger als eigenständiges Objekt benötigt wird, kann Option A als konventionelles Schema-Muster (`Connection`-Objekttyp) *oberhalb* von Option B aufgebaut werden, ohne den Bootstrap-Kern zu verändern.
+Das in `AssertionModelComparisonRunner` durchgeführte Experiment über `5.000` Paare bei Dichten `k ∈ {1, 2, 5}` Aussagen pro Paar (inkl. `weight`, `confidence`, `supportedBy -> SourceDocument`, Details in [stage2-assertions/analysis.md](../experiments/stage2-assertions/analysis.md)) bestätigt **Option B (`Edge = Assertion`)** eindeutig:
+
+- **Struktur- & Speicherersparnis:** Option B benötigt **~19–33 % weniger Heap pro Aussage** (`~2.110–2.222 B` vs. `~2.671–3.304 B`) sowie **~24–35 % weniger Entities** (`8,23–9,16` vs. `10,83–14,17` Entities/Aussage).
+- **Lese- & Schreibperformance:** Direkte Traversals auf typisierten Edges sind **~1,4–2,1× schneller** (`900–1.900 ns` p50 vs. `1.900–3.200 ns`) und liefern höhere Schreibdurchsätze.
+- **Kardinalitäts- & Multi-Source-Kompatibilität:** Über `PredicateConstraints` lässt sich pro Prädikat sauber steuern, ob doppelte `(source, predicate, target)`-Aussagen verboten sind (`uniqueSet`) oder für konkurrierende Quellen zugelassen bleiben (`unconstrained`, default).
+
+Option B bleibt daher verbindliches Kernmodell. Option A kann bei Bedarf als reines Fachmodell (`Connection`-Objekttyp) oberhalb des Kerns modelliert werden, ohne Engine-Primitiven zu erweitern.
