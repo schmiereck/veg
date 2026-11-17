@@ -17,6 +17,7 @@ import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
@@ -508,6 +509,16 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
     }
 
     @Override
+    public IdGenerationStrategy idGenerationStrategy() {
+        return delegate.idGenerationStrategy();
+    }
+
+    @Override
+    public void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        delegate.setIdGenerationStrategy(strategy);
+    }
+
+    @Override
     public synchronized void close() {
         try {
             walStore.close();
@@ -820,12 +831,17 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
         long maxId = EntityId.USER_MIN_ID - 1L;
         for (Commit c : commits) {
             for (Change change : c.changes()) {
-                maxId = Math.max(maxId, change.primaryEntityId().value());
+                EntityId pid = change.primaryEntityId();
+                if (!pid.isUuid()) {
+                    maxId = Math.max(maxId, pid.value());
+                }
             }
         }
         for (PersistentGraphSnapshot snap : hotSnapshots.values()) {
             for (var node : snap.allEntities()) {
-                maxId = Math.max(maxId, node.id().value());
+                if (!node.id().isUuid()) {
+                    maxId = Math.max(maxId, node.id().value());
+                }
             }
         }
         return maxId;

@@ -1,11 +1,13 @@
 package io.veg.engine.memory;
 
+import io.veg.engine.SchemaViolationException;
 import io.veg.model.BootstrapIds;
 import io.veg.model.Change;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
@@ -39,6 +41,7 @@ final class MutableGraphState {
 
     final AtomicLong userEntityIdAllocator;
     long nextBootstrapAuxId;
+    IdGenerationStrategy idGenerationStrategy = IdGenerationStrategy.SEQUENTIAL;
 
     MutableGraphState() {
         this(new AtomicLong(EntityId.USER_MIN_ID));
@@ -78,6 +81,7 @@ final class MutableGraphState {
         }
         this.userEntityIdAllocator = source.userEntityIdAllocator;
         this.nextBootstrapAuxId = source.nextBootstrapAuxId;
+        this.idGenerationStrategy = source.idGenerationStrategy;
     }
 
     MutableGraphState copy() {
@@ -93,7 +97,27 @@ final class MutableGraphState {
     }
 
     EntityId allocateUserId() {
-        return new EntityId(userEntityIdAllocator.getAndIncrement());
+        return switch (idGenerationStrategy) {
+            case SEQUENTIAL -> new EntityId(userEntityIdAllocator.getAndIncrement());
+            case UUID_V7 -> EntityId.newUuidV7();
+            case UUID_V4 -> EntityId.randomUuid();
+        };
+    }
+
+    EntityId resolveOrRegisterExplicitId(EntityId explicitId) {
+        if (explicitId == null) {
+            return allocateUserId();
+        }
+        if (explicitId.isBootstrap()) {
+            throw new SchemaViolationException("Explicit user EntityId must not collide with bootstrap range: " + explicitId);
+        }
+        if (entities.containsKey(explicitId) || edges.containsKey(explicitId)) {
+            throw new SchemaViolationException("Explicit EntityId already exists in graph: " + explicitId);
+        }
+        if (!explicitId.isUuid()) {
+            userEntityIdAllocator.accumulateAndGet(explicitId.value() + 1L, Math::max);
+        }
+        return explicitId;
     }
 
     void putEntity(EntityNode node) {
@@ -177,11 +201,13 @@ final class MutableGraphState {
                 .toList();
         for (EntityNode node : sortedNodes) {
             entitiesByType.computeIfAbsent(node.typeId(), ignored -> new ArrayList<>()).add(node);
-            long raw = node.id().value();
-            if (raw >= EntityId.USER_MIN_ID) {
-                maxUser = Math.max(maxUser, raw);
-            } else if (raw >= 100L) {
-                maxBootstrapAux = Math.max(maxBootstrapAux, raw);
+            if (!node.id().isUuid()) {
+                long raw = node.id().value();
+                if (raw >= EntityId.USER_MIN_ID) {
+                    maxUser = Math.max(maxUser, raw);
+                } else if (raw >= 100L) {
+                    maxBootstrapAux = Math.max(maxBootstrapAux, raw);
+                }
             }
 
             if (node.kind() == EntityKind.META_TYPE || node.kind() == EntityKind.SCALAR_TYPE) {

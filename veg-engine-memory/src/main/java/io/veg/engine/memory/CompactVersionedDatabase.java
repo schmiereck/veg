@@ -19,6 +19,7 @@ import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
@@ -70,6 +71,7 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
 
     private String activeBranch = DEFAULT_BRANCH;
     private volatile ResolvedCache lastResolved;
+    private volatile IdGenerationStrategy idGenerationStrategy = IdGenerationStrategy.SEQUENTIAL;
 
     public CompactVersionedDatabase() {
         this(1);
@@ -361,8 +363,10 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         rwLock.readLock().lock();
         try {
             CommitId head = branchHead(branchName);
+            MutableGraphState baseState = mutableStateForCommit(head);
+            baseState.idGenerationStrategy = this.idGenerationStrategy;
             return new InMemoryTransaction(
-                    this, branchName, head, mutableStateForCommit(head), dataCategory, actor, reason, correlationId);
+                    this, branchName, head, baseState, dataCategory, actor, reason, correlationId);
         } finally {
             rwLock.readLock().unlock();
         }
@@ -687,10 +691,22 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
     }
 
     @Override
+    public IdGenerationStrategy idGenerationStrategy() {
+        return idGenerationStrategy;
+    }
+
+    @Override
+    public void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        this.idGenerationStrategy = Objects.requireNonNull(strategy, "strategy must not be null");
+    }
+
+    @Override
     public MutableGraphState stateCopyForBranch(String branchName) {
         rwLock.readLock().lock();
         try {
-            return mutableStateForCommit(branchHead(branchName));
+            MutableGraphState copy = mutableStateForCommit(branchHead(branchName));
+            copy.idGenerationStrategy = this.idGenerationStrategy;
+            return copy;
         } finally {
             rwLock.readLock().unlock();
         }

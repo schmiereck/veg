@@ -23,7 +23,10 @@ If the `veg-project-kb` MCP server (`.agents/plugins/veg-mcp/mcp_config.json`) i
    ```
 4. **Inspect one entity (`veg_entity`)** to retrieve all scalar attributes, outgoing relations, incoming relations, bitemporal validity windows, and commit history.
 5. **Commit audited mutations (`veg_mutate`)** with explicit `actor` and `reason`:
-   - `create_object`, `set_attribute`, `connect`, `disconnect`, `define_object_type`, `define_value_type`, `define_predicate`.
+   - `create_object` (with optional `idStrategy`: `SEQUENTIAL`, `UUID_V7`, `UUID_V4`), `set_attribute`, `connect`, `disconnect`, `define_object_type`, `define_value_type`, `define_predicate`.
+6. **Export & 3-way merge Git patches (`veg_patch`)**:
+   - `action = export` produces a deterministic plain-text `.vegpatch` diff using symbolic `@Type:` / `@Pred:` references and UUIDs.
+   - `action = apply` or `merge` imports a `.vegpatch` idempotently (via SHA-256 `patch-id`), running full three-way merge when `base-commit` exists locally.
 
 ## 2. CLI Fallback (`veg-cli db`)
 
@@ -44,6 +47,10 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb insp
 
 # Commit history
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb commits
+
+# Export & 3-way merge Git-friendly .vegpatch diffs (and create UUIDv7 entities)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb export-patch --from c4 --to c5 --output diff.vegpatch
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb apply-patch --input diff.vegpatch --mode merge
 ```
 
 ## 3. Importing or Launching Studio

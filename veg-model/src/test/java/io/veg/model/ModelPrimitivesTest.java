@@ -25,7 +25,23 @@ class ModelPrimitivesTest {
         assertThat(bootstrap.isBootstrap()).isTrue();
         assertThat(boundary.isBootstrap()).isTrue();
         assertThat(user.isBootstrap()).isFalse();
+        assertThat(user.isUuid()).isFalse();
         assertThat(bootstrap.compareTo(user)).isLessThan(0);
+
+        EntityId v7 = EntityId.newUuidV7();
+        EntityId v4 = EntityId.randomUuid();
+        assertThat(v7.isUuid()).isTrue();
+        assertThat(v7.isBootstrap()).isFalse();
+        assertThat(v4.isUuid()).isTrue();
+        assertThat(EntityId.parse(v7.toString())).isEqualTo(v7);
+        assertThat(EntityId.parse(v7.compactString())).isEqualTo(v7);
+        assertThat(EntityId.parse("#1025")).isEqualTo(new EntityId(1025L));
+        assertThat(user.compareTo(v7)).isLessThan(0);
+        assertThat(IdGenerationStrategy.values()).containsExactly(
+                IdGenerationStrategy.SEQUENTIAL,
+                IdGenerationStrategy.UUID_V7,
+                IdGenerationStrategy.UUID_V4
+        );
     }
 
     @Test

@@ -31,61 +31,61 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
 
     private static final EntityKind[] ENTITY_KINDS = EntityKind.values();
 
-    private final long[] entityIds;
-    private final long[] entityTypeIds;
+    private final EntityId[] entityIds;
+    private final EntityId[] entityTypeIds;
     private final byte[] entityKinds;
     private final Value[] entityPayloads;
 
-    private final long[] edgeIds;
-    private final long[] edgeSources;
-    private final long[] edgePredicates;
-    private final long[] edgeTargets;
+    private final EntityId[] edgeIds;
+    private final EntityId[] edgeSources;
+    private final EntityId[] edgePredicates;
+    private final EntityId[] edgeTargets;
 
-    private final long[] outOwnerIds;
+    private final EntityId[] outOwnerIds;
     private final int[] outOffsets;
     private final int[] outEdgeIndices;
 
-    private final long[] inOwnerIds;
+    private final EntityId[] inOwnerIds;
     private final int[] inOffsets;
     private final int[] inEdgeIndices;
 
-    private final long[] indexedTypeIds;
+    private final EntityId[] indexedTypeIds;
     private final int[] typeOffsets;
     private final int[] typeEntityIndices;
     private final SnapshotAclCache aclCache = new SnapshotAclCache();
 
     private final String[] typeNames;
-    private final long[] typeIds;
+    private final EntityId[] typeIds;
     private final String[] predicateNames;
-    private final long[] predicateIds;
+    private final EntityId[] predicateIds;
     private final String[] principalNames;
-    private final long[] principalIds;
+    private final EntityId[] principalIds;
     private final List<EntityId> propagationRuleIds;
 
     private CompactGraphSnapshot(
-            long[] entityIds,
-            long[] entityTypeIds,
+            EntityId[] entityIds,
+            EntityId[] entityTypeIds,
             byte[] entityKinds,
             Value[] entityPayloads,
-            long[] edgeIds,
-            long[] edgeSources,
-            long[] edgePredicates,
-            long[] edgeTargets,
-            long[] outOwnerIds,
+            EntityId[] edgeIds,
+            EntityId[] edgeSources,
+            EntityId[] edgePredicates,
+            EntityId[] edgeTargets,
+            EntityId[] outOwnerIds,
             int[] outOffsets,
             int[] outEdgeIndices,
-            long[] inOwnerIds,
+            EntityId[] inOwnerIds,
             int[] inOffsets,
             int[] inEdgeIndices,
-            long[] indexedTypeIds,
+            EntityId[] indexedTypeIds,
             int[] typeOffsets,
             int[] typeEntityIndices,
             String[] typeNames,
-            long[] typeIds,
+            EntityId[] typeIds,
             String[] predicateNames,
-            long[] predicateIds,
+            EntityId[] predicateIds,
             String[] principalNames,
-            long[] principalIds,
+            EntityId[] principalIds,
             List<EntityId> propagationRuleIds
     ) {
         this.entityIds = entityIds;
@@ -119,16 +119,16 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 .sorted(Comparator.comparing(EntityNode::id))
                 .toList();
         int nEnt = sortedEntities.size();
-        long[] entityIds = new long[nEnt];
-        long[] entityTypeIds = new long[nEnt];
+        EntityId[] entityIds = new EntityId[nEnt];
+        EntityId[] entityTypeIds = new EntityId[nEnt];
         byte[] entityKinds = new byte[nEnt];
         Value[] entityPayloads = new Value[nEnt];
         List<EntityId> propRules = new ArrayList<>();
 
         for (int i = 0; i < nEnt; i++) {
             EntityNode node = sortedEntities.get(i);
-            entityIds[i] = node.id().value();
-            entityTypeIds[i] = node.typeId().value();
+            entityIds[i] = node.id();
+            entityTypeIds[i] = node.typeId();
             entityKinds[i] = (byte) node.kind().ordinal();
             entityPayloads[i] = node.payload().map(interner::intern).orElse(null);
             if (BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(node.typeId())) {
@@ -140,16 +140,16 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 .sorted(Comparator.comparing(Edge::id))
                 .toList();
         int nEdg = sortedEdges.size();
-        long[] edgeIds = new long[nEdg];
-        long[] edgeSources = new long[nEdg];
-        long[] edgePredicates = new long[nEdg];
-        long[] edgeTargets = new long[nEdg];
+        EntityId[] edgeIds = new EntityId[nEdg];
+        EntityId[] edgeSources = new EntityId[nEdg];
+        EntityId[] edgePredicates = new EntityId[nEdg];
+        EntityId[] edgeTargets = new EntityId[nEdg];
         for (int i = 0; i < nEdg; i++) {
             Edge e = sortedEdges.get(i);
-            edgeIds[i] = e.id().value();
-            edgeSources[i] = e.sourceId().value();
-            edgePredicates[i] = e.predicateId().value();
-            edgeTargets[i] = e.targetId().value();
+            edgeIds[i] = e.id();
+            edgeSources[i] = e.sourceId();
+            edgePredicates[i] = e.predicateId();
+            edgeTargets[i] = e.targetId();
         }
 
         CsrAdjacency outgoingCsr = buildCsr(edgeSources, edgeIds);
@@ -201,14 +201,14 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
     @Override
     public Optional<EntityNode> findEntity(EntityId id) {
         Objects.requireNonNull(id, "id must not be null");
-        int idx = Arrays.binarySearch(entityIds, id.value());
+        int idx = Arrays.binarySearch(entityIds, id);
         return idx >= 0 ? Optional.of(nodeAt(idx)) : Optional.empty();
     }
 
     @Override
     public Optional<Edge> findEdge(EntityId edgeId) {
         Objects.requireNonNull(edgeId, "edgeId must not be null");
-        int idx = Arrays.binarySearch(edgeIds, edgeId.value());
+        int idx = Arrays.binarySearch(edgeIds, edgeId);
         return idx >= 0 ? Optional.of(edgeAt(idx)) : Optional.empty();
     }
 
@@ -282,27 +282,27 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
     @Override
     public List<Edge> findOutgoingEdges(EntityId sourceId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
-        return readCsrEdges(outOwnerIds, outOffsets, outEdgeIndices, sourceId.value(), null);
+        return readCsrEdges(outOwnerIds, outOffsets, outEdgeIndices, sourceId, null);
     }
 
     @Override
     public List<Edge> findOutgoingEdges(EntityId sourceId, EntityId predicateId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
         Objects.requireNonNull(predicateId, "predicateId must not be null");
-        return readCsrEdges(outOwnerIds, outOffsets, outEdgeIndices, sourceId.value(), predicateId);
+        return readCsrEdges(outOwnerIds, outOffsets, outEdgeIndices, sourceId, predicateId);
     }
 
     @Override
     public List<Edge> findIncomingEdges(EntityId targetId) {
         Objects.requireNonNull(targetId, "targetId must not be null");
-        return readCsrEdges(inOwnerIds, inOffsets, inEdgeIndices, targetId.value(), null);
+        return readCsrEdges(inOwnerIds, inOffsets, inEdgeIndices, targetId, null);
     }
 
     @Override
     public List<Edge> findIncomingEdges(EntityId targetId, EntityId predicateId) {
         Objects.requireNonNull(targetId, "targetId must not be null");
         Objects.requireNonNull(predicateId, "predicateId must not be null");
-        return readCsrEdges(inOwnerIds, inOffsets, inEdgeIndices, targetId.value(), predicateId);
+        return readCsrEdges(inOwnerIds, inOffsets, inEdgeIndices, targetId, predicateId);
     }
 
     @Override
@@ -318,7 +318,7 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
     @Override
     public List<EntityNode> findEntitiesByType(EntityId typeId) {
         Objects.requireNonNull(typeId, "typeId must not be null");
-        int slot = Arrays.binarySearch(indexedTypeIds, typeId.value());
+        int slot = Arrays.binarySearch(indexedTypeIds, typeId);
         if (slot < 0) {
             return List.of();
         }
@@ -387,8 +387,8 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
 
     private EntityNode nodeAt(int idx) {
         return new EntityNode(
-                new EntityId(entityIds[idx]),
-                new EntityId(entityTypeIds[idx]),
+                entityIds[idx],
+                entityTypeIds[idx],
                 ENTITY_KINDS[entityKinds[idx]],
                 Optional.ofNullable(entityPayloads[idx])
         );
@@ -396,14 +396,14 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
 
     private Edge edgeAt(int idx) {
         return new Edge(
-                new EntityId(edgeIds[idx]),
-                new EntityId(edgeSources[idx]),
-                new EntityId(edgePredicates[idx]),
-                new EntityId(edgeTargets[idx])
+                edgeIds[idx],
+                edgeSources[idx],
+                edgePredicates[idx],
+                edgeTargets[idx]
         );
     }
 
-    private List<Edge> readCsrEdges(long[] ownerIds, int[] offsets, int[] edgeIndices, long ownerId, EntityId predicateFilter) {
+    private List<Edge> readCsrEdges(EntityId[] ownerIds, int[] offsets, int[] edgeIndices, EntityId ownerId, EntityId predicateFilter) {
         int slot = Arrays.binarySearch(ownerIds, ownerId);
         if (slot < 0) {
             return List.of();
@@ -416,10 +416,9 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 result.add(edgeAt(edgeIndices[pos]));
             }
         } else {
-            long filterVal = predicateFilter.value();
             for (int pos = start; pos < end; pos++) {
                 int eIdx = edgeIndices[pos];
-                if (edgePredicates[eIdx] == filterVal) {
+                if (edgePredicates[eIdx].equals(predicateFilter)) {
                     result.add(edgeAt(eIdx));
                 }
             }
@@ -450,15 +449,15 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 && flagNode.get().payload().get() instanceof Value.BooleanValue(boolean val) && val;
     }
 
-    private static Optional<EntityId> lookupNameTable(String[] names, long[] ids, String query) {
+    private static Optional<EntityId> lookupNameTable(String[] names, EntityId[] ids, String query) {
         if (query == null) {
             return Optional.empty();
         }
         int idx = Arrays.binarySearch(names, query);
-        return idx >= 0 ? Optional.of(new EntityId(ids[idx])) : Optional.empty();
+        return idx >= 0 ? Optional.of(ids[idx]) : Optional.empty();
     }
 
-    private record NameTable(String[] names, long[] ids) {
+    private record NameTable(String[] names, EntityId[] ids) {
     }
 
     private static NameTable buildNameTable(Map<String, EntityId> map) {
@@ -466,39 +465,39 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 .sorted(Map.Entry.comparingByKey())
                 .toList();
         String[] names = new String[entries.size()];
-        long[] ids = new long[entries.size()];
+        EntityId[] ids = new EntityId[entries.size()];
         for (int i = 0; i < entries.size(); i++) {
             names[i] = entries.get(i).getKey();
-            ids[i] = entries.get(i).getValue().value();
+            ids[i] = entries.get(i).getValue();
         }
         return new NameTable(names, ids);
     }
 
-    private record CsrAdjacency(long[] owners, int[] offsets, int[] edgeIndices) {
+    private record CsrAdjacency(EntityId[] owners, int[] offsets, int[] edgeIndices) {
     }
 
-    private static CsrAdjacency buildCsr(long[] edgeEndpointIds, long[] sortedEdgeIds) {
+    private static CsrAdjacency buildCsr(EntityId[] edgeEndpointIds, EntityId[] sortedEdgeIds) {
         int n = edgeEndpointIds.length;
         if (n == 0) {
-            return new CsrAdjacency(new long[0], new int[]{0}, new int[0]);
+            return new CsrAdjacency(new EntityId[0], new int[]{0}, new int[0]);
         }
         Integer[] order = new Integer[n];
         for (int i = 0; i < n; i++) {
             order[i] = i;
         }
         Arrays.sort(order, (a, b) -> {
-            int cmp = Long.compare(edgeEndpointIds[a], edgeEndpointIds[b]);
-            return cmp != 0 ? cmp : Long.compare(sortedEdgeIds[a], sortedEdgeIds[b]);
+            int cmp = edgeEndpointIds[a].compareTo(edgeEndpointIds[b]);
+            return cmp != 0 ? cmp : sortedEdgeIds[a].compareTo(sortedEdgeIds[b]);
         });
 
         int distinctOwners = 1;
         for (int i = 1; i < n; i++) {
-            if (edgeEndpointIds[order[i]] != edgeEndpointIds[order[i - 1]]) {
+            if (!edgeEndpointIds[order[i]].equals(edgeEndpointIds[order[i - 1]])) {
                 distinctOwners++;
             }
         }
 
-        long[] owners = new long[distinctOwners];
+        EntityId[] owners = new EntityId[distinctOwners];
         int[] offsets = new int[distinctOwners + 1];
         int[] edgeIndices = new int[n];
 
@@ -509,8 +508,8 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
         for (int i = 1; i < n; i++) {
             int idx = order[i];
             edgeIndices[i] = idx;
-            long owner = edgeEndpointIds[idx];
-            if (owner != owners[ownerIdx]) {
+            EntityId owner = edgeEndpointIds[idx];
+            if (!owner.equals(owners[ownerIdx])) {
                 ownerIdx++;
                 owners[ownerIdx] = owner;
                 offsets[ownerIdx] = i;

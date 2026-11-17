@@ -3,9 +3,11 @@ package io.veg.cli.mcp;
 import io.veg.cli.json.JsonCodec;
 import io.veg.cli.kb.GraphTabularService;
 import io.veg.cli.kb.GraphTabularService.SnapshotContext;
+import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Reason;
 import io.veg.model.ValueType;
 
@@ -167,6 +169,7 @@ public final class VegMcpStdioServer {
                     yield GraphTabularService.entityDetail(db, ctx, id);
                 }
                 case "veg_history" -> GraphTabularService.commitsHistory(db);
+                case "veg_patch" -> executePatchTool(args);
                 case "veg_mutate" -> executeMutate(args);
                 default -> throw new IllegalArgumentException("Unknown tool: " + toolName);
             };
@@ -209,7 +212,11 @@ public final class VegMcpStdioServer {
                         attrs.put(e.getKey(), String.valueOf(e.getValue()));
                     }
                 }
-                yield GraphTabularService.createObject(db, branch, actor, reason, typeName, attrs);
+                IdGenerationStrategy strategy = JsonCodec.asOptionalString(args, "idStrategy")
+                        .filter(s -> !s.isBlank())
+                        .map(s -> IdGenerationStrategy.valueOf(s.trim().toUpperCase(Locale.ROOT).replace('-', '_')))
+                        .orElse(null);
+                yield GraphTabularService.createObject(db, branch, actor, reason, typeName, attrs, strategy);
             }
             case "set_attribute" -> {
                 EntityId entityId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "entityId"));
@@ -338,7 +345,43 @@ public final class VegMcpStdioServer {
                 mutateProps,
                 List.of("action")));
 
+        Map<String, Object> patchProps = new LinkedHashMap<>();
+        patchProps.put("action", prop("string", "One of: export, apply, merge."));
+        patchProps.put("fromCommit", prop("string", "Base commit ID (e.g. 'c4') for export."));
+        patchProps.put("toCommit", prop("string", "Target commit ID (e.g. 'c5') for export."));
+        patchProps.put("patchText", prop("string", "Raw .vegpatch text for apply or merge."));
+        patchProps.put("branch", prop("string", "Target branch (defaults to current branch)."));
+        patchProps.put("actor", prop("string", "Optional actor identifier override."));
+        patchProps.put("reason", prop("string", "Optional audit reason override."));
+        tools.add(toolSpec("veg_patch",
+                "Export a Git-friendly .vegpatch diff between commits, or apply / 3-way merge a .vegpatch into a branch.",
+                patchProps,
+                List.of("action")));
+
         return tools;
+    }
+
+    private Object executePatchTool(Map<String, Object> args) {
+        String action = JsonCodec.requireString(args, "action").toLowerCase(Locale.ROOT);
+        return switch (action) {
+            case "export" -> GraphTabularService.exportPatch(
+                    db,
+                    JsonCodec.requireString(args, "fromCommit"),
+                    JsonCodec.requireString(args, "toCommit")
+            );
+            case "apply", "merge" -> {
+                PatchApplyMode mode = "apply".equals(action) ? PatchApplyMode.APPLY : PatchApplyMode.MERGE;
+                String branch = JsonCodec.asOptionalString(args, "branch").orElse(db.currentBranch());
+                Actor actor = JsonCodec.asOptionalString(args, "actor").filter(s -> !s.isBlank())
+                        .map(Actor::user).orElse(null);
+                Reason reason = JsonCodec.asOptionalString(args, "reason").filter(s -> !s.isBlank())
+                        .map(Reason::of).orElse(null);
+                yield GraphTabularService.applyOrMergePatch(
+                        db, JsonCodec.requireString(args, "patchText"), branch, mode, actor, reason
+                );
+            }
+            default -> throw new IllegalArgumentException("Unsupported veg_patch action: " + action);
+        };
     }
 
     private static Map<String, Object> toolSpec(

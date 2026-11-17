@@ -2,6 +2,9 @@ package io.veg.cli.kb;
 
 import io.veg.engine.GraphReader;
 import io.veg.engine.GraphTransaction;
+import io.veg.engine.VegPatchService;
+import io.veg.engine.VegPatchService.PatchApplyMode;
+import io.veg.engine.VegPatchService.PatchResult;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.model.Actor;
 import io.veg.model.BootstrapIds;
@@ -15,6 +18,7 @@ import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
 import io.veg.model.GraphDiff;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.QueryRow;
 import io.veg.model.Reason;
@@ -115,11 +119,11 @@ public final class GraphTabularService {
     }
 
     public static EntityId parseEntityId(String text) {
-        String normalized = text.trim();
-        if (normalized.startsWith("#")) {
-            normalized = normalized.substring(1);
-        }
-        return new EntityId(Long.parseLong(normalized));
+        return EntityId.parse(text);
+    }
+
+    private static Object jsonId(EntityId id) {
+        return id.isUuid() ? id.compactString() : id.value();
     }
 
     public static Map<String, Object> overview(VersionedGraphDatabase db, SnapshotContext ctx) {
@@ -138,7 +142,7 @@ public final class GraphTabularService {
                 .sorted(Comparator.comparing(n -> resolveTypeName(reader, n.id())))
                 .map(n -> {
                     Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("id", n.id().value());
+                    row.put("id", jsonId(n.id()));
                     row.put("name", resolveTypeName(reader, n.id()));
                     row.put("count", countsByType.getOrDefault(n.id(), 0L));
                     return row;
@@ -150,7 +154,7 @@ public final class GraphTabularService {
                 .sorted(Comparator.comparing(n -> resolveTypeName(reader, n.id())))
                 .map(n -> {
                     Map<String, Object> row = new LinkedHashMap<>();
-                    row.put("id", n.id().value());
+                    row.put("id", jsonId(n.id()));
                     row.put("name", resolveTypeName(reader, n.id()));
                     row.put("scalarType", resolveValueTypeScalar(reader, n.id()).map(Enum::name).orElse("UNKNOWN"));
                     row.put("uniqueValues", reader.isUniqueValueType(n.id()));
@@ -239,7 +243,7 @@ public final class GraphTabularService {
             for (PredicateMeta col : columns) {
                 Map<String, Object> spec = new LinkedHashMap<>();
                 spec.put("name", col.name());
-                spec.put("predicateId", col.id().value());
+                spec.put("predicateId", jsonId(col.id()));
                 spec.put("kind", "VALUE_TYPE".equals(col.rangeKind()) ? "ATTRIBUTE" : "RELATION");
                 spec.put("rangeType", col.rangeName());
                 spec.put("scalarType", col.scalarType() != null ? col.scalarType().name() : null);
@@ -272,7 +276,7 @@ public final class GraphTabularService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("typeName", typeName);
-        result.put("typeId", typeId.value());
+        result.put("typeId", jsonId(typeId));
         result.put("typeKind", isValueType ? "VALUE_TYPE" : "OBJECT_TYPE");
         result.put("branch", ctx.branchName());
         result.put("commitId", ctx.commitId().toString());
@@ -302,10 +306,10 @@ public final class GraphTabularService {
                     .orElse(PredicateConstraints.unconstrained());
             if (target != null && target.kind() == EntityKind.VALUE) {
                 Map<String, Object> attr = new LinkedHashMap<>();
-                attr.put("edgeId", edge.id().value());
-                attr.put("predicateId", edge.predicateId().value());
+                attr.put("edgeId", jsonId(edge.id()));
+                attr.put("predicateId", jsonId(edge.predicateId()));
                 attr.put("predicate", predName);
-                attr.put("valueEntityId", target.id().value());
+                attr.put("valueEntityId", jsonId(target.id()));
                 attr.put("valueType", resolveTypeName(reader, target.typeId()));
                 attr.put("scalarType", target.payload().map(v -> v.valueType().name()).orElse("STRING"));
                 attr.put("value", target.payload().map(GraphTabularService::formatValue).orElse(""));
@@ -337,9 +341,9 @@ public final class GraphTabularService {
                 .toList();
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("id", node.id().value());
+        result.put("id", jsonId(node.id()));
         result.put("kind", node.kind().name());
-        result.put("typeId", node.typeId().value());
+        result.put("typeId", jsonId(node.typeId()));
         result.put("typeName", typeName);
         result.put("label", resolveEntityLabel(reader, node));
         result.put("payload", node.payload().map(GraphTabularService::formatValue).orElse(null));
@@ -388,7 +392,7 @@ public final class GraphTabularService {
             for (Map.Entry<String, EntityId> e : qr.bindings().entrySet()) {
                 EntityNode n = reader.findEntity(e.getValue()).orElse(null);
                 bindingsJson.put(e.getKey(), Map.of(
-                        "id", e.getValue().value(),
+                        "id", jsonId(e.getValue()),
                         "typeName", n != null ? resolveTypeName(reader, n.typeId()) : "",
                         "label", n != null ? resolveEntityLabel(reader, n) : e.getValue().toString()
                 ));
@@ -451,7 +455,7 @@ public final class GraphTabularService {
         out.put("empty", diff.isEmpty());
         out.put("addedEntities", diff.addedEntities().stream()
                 .map(n -> Map.<String, Object>of(
-                        "id", n.id().value(),
+                        "id", jsonId(n.id()),
                         "kind", n.kind().name(),
                         "typeName", resolveTypeName(toReader, n.typeId()),
                         "label", resolveEntityLabel(toReader, n),
@@ -460,7 +464,7 @@ public final class GraphTabularService {
                 .toList());
         out.put("removedEntities", diff.removedEntities().stream()
                 .map(n -> Map.<String, Object>of(
-                        "id", n.id().value(),
+                        "id", jsonId(n.id()),
                         "kind", n.kind().name(),
                         "typeName", resolveTypeName(fromReader, n.typeId()),
                         "label", resolveEntityLabel(fromReader, n),
@@ -469,25 +473,64 @@ public final class GraphTabularService {
                 .toList());
         out.put("updatedValues", diff.updatedValues().stream()
                 .map(u -> Map.<String, Object>of(
-                        "entityId", u.entityId().value(),
+                        "entityId", jsonId(u.entityId()),
                         "previousValue", formatValue(u.previousValue()),
                         "newValue", formatValue(u.newValue())
                 ))
                 .toList());
         out.put("addedEdges", diff.addedEdges().stream()
                 .map(e -> Map.<String, Object>of(
-                        "id", e.id().value(),
-                        "sourceId", e.sourceId().value(),
+                        "id", jsonId(e.id()),
+                        "sourceId", jsonId(e.sourceId()),
                         "predicate", resolveTypeName(toReader, e.predicateId()),
-                        "targetId", e.targetId().value()
+                        "targetId", jsonId(e.targetId())
                 ))
                 .toList());
         out.put("removedEdges", diff.removedEdges().stream()
                 .map(e -> Map.<String, Object>of(
-                        "id", e.id().value(),
-                        "sourceId", e.sourceId().value(),
+                        "id", jsonId(e.id()),
+                        "sourceId", jsonId(e.sourceId()),
                         "predicate", resolveTypeName(fromReader, e.predicateId()),
-                        "targetId", e.targetId().value()
+                        "targetId", jsonId(e.targetId())
+                ))
+                .toList());
+        return out;
+    }
+
+    public static Map<String, Object> exportPatch(VersionedGraphDatabase db, String fromStr, String toStr) {
+        CommitId from = parseCommitId(fromStr);
+        CommitId to = parseCommitId(toStr);
+        String patchText = VegPatchService.exportPatch(db, from, to);
+        return Map.of(
+                "fromCommitId", from.toString(),
+                "toCommitId", to.toString(),
+                "patchText", patchText
+        );
+    }
+
+    public static Map<String, Object> applyOrMergePatch(
+            VersionedGraphDatabase db,
+            String patchText,
+            String branch,
+            PatchApplyMode mode,
+            Actor actor,
+            Reason reason
+    ) {
+        String targetBranch = resolveWritableBranch(db, branch);
+        PatchResult res = VegPatchService.applyOrMergePatch(db, patchText, targetBranch, mode, actor, reason);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("patchId", res.patchId());
+        out.put("mode", res.mode().name());
+        out.put("alreadyApplied", res.alreadyApplied());
+        out.put("merged", res.merged());
+        out.put("commitId", res.resultCommitId() != null ? res.resultCommitId().toString() : null);
+        out.put("targetBranch", res.targetBranch());
+        out.put("incomingBranch", res.incomingBranch());
+        out.put("conflicts", res.conflicts().stream()
+                .map(c -> Map.<String, Object>of(
+                        "type", c.type().name(),
+                        "entityId", jsonId(c.subjectId()),
+                        "description", c.description()
                 ))
                 .toList());
         return out;
@@ -501,10 +544,25 @@ public final class GraphTabularService {
             String typeName,
             Map<String, String> attributes
     ) {
+        return createObject(db, branch, actor, reason, typeName, attributes, null);
+    }
+
+    public static Map<String, Object> createObject(
+            VersionedGraphDatabase db,
+            String branch,
+            Actor actor,
+            Reason reason,
+            String typeName,
+            Map<String, String> attributes,
+            IdGenerationStrategy idStrategy
+    ) {
         String targetBranch = resolveWritableBranch(db, branch);
         EntityId createdId;
         CommitId commitId;
         try (GraphTransaction tx = db.beginTransaction(targetBranch, actor, reason, null, DataCategory.REFERENCE)) {
+            if (idStrategy != null) {
+                tx.setIdGenerationStrategy(idStrategy);
+            }
             EntityId typeId = tx.findTypeByName(typeName)
                     .orElseThrow(() -> new IllegalArgumentException("Unknown ObjectType: " + typeName));
             createdId = tx.createObject(typeId);
@@ -520,7 +578,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "entityId", createdId.value()
+                "entityId", jsonId(createdId)
         );
     }
 
@@ -544,9 +602,9 @@ public final class GraphTabularService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("commitId", commitId.toString());
         result.put("branch", targetBranch);
-        result.put("entityId", entityId.value());
+        result.put("entityId", jsonId(entityId));
         result.put("predicate", predicateName);
-        result.put("valueEntityId", valueId != null ? valueId.value() : null);
+        result.put("valueEntityId", valueId != null ? jsonId(valueId) : null);
         return result;
     }
 
@@ -572,7 +630,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "entityId", valueEntityId.value()
+                "entityId", jsonId(valueEntityId)
         );
     }
 
@@ -597,7 +655,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "edgeId", edgeId.value()
+                "edgeId", jsonId(edgeId)
         );
     }
 
@@ -617,7 +675,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "disconnectedEdgeId", edgeId.value()
+                "disconnectedEdgeId", jsonId(edgeId)
         );
     }
 
@@ -635,7 +693,7 @@ public final class GraphTabularService {
             typeId = tx.defineObjectType(name.trim());
             commitId = tx.commit();
         }
-        return Map.of("commitId", commitId.toString(), "branch", targetBranch, "typeId", typeId.value(), "name", name.trim());
+        return Map.of("commitId", commitId.toString(), "branch", targetBranch, "typeId", jsonId(typeId), "name", name.trim());
     }
 
     public static Map<String, Object> defineValueType(
@@ -657,7 +715,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "typeId", typeId.value(),
+                "typeId", jsonId(typeId),
                 "name", name.trim(),
                 "scalarType", scalarType.name()
         );
@@ -688,7 +746,7 @@ public final class GraphTabularService {
         return Map.of(
                 "commitId", commitId.toString(),
                 "branch", targetBranch,
-                "predicateId", predId.value(),
+                "predicateId", jsonId(predId),
                 "name", name.trim()
         );
     }
@@ -845,8 +903,8 @@ public final class GraphTabularService {
                             .orElse("");
                     cells.put(col.name(), valStr);
                     cellMeta.put(col.name(), Map.of(
-                            "edgeId", e.id().value(),
-                            "valueEntityId", e.targetId().value()
+                            "edgeId", jsonId(e.id()),
+                            "valueEntityId", jsonId(e.targetId())
                     ));
                 } else {
                     List<String> parts = new ArrayList<>(edges.size());
@@ -866,8 +924,8 @@ public final class GraphTabularService {
                     String lbl = target != null ? resolveEntityLabel(reader, target) : e.targetId().toString();
                     labels.add(lbl);
                     links.add(Map.of(
-                            "edgeId", e.id().value(),
-                            "targetId", e.targetId().value(),
+                            "edgeId", jsonId(e.id()),
+                            "targetId", jsonId(e.targetId()),
                             "targetLabel", lbl,
                             "targetType", target != null ? resolveTypeName(reader, target.typeId()) : ""
                     ));
@@ -880,7 +938,7 @@ public final class GraphTabularService {
         }
 
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("_id", node.id().value());
+        row.put("_id", jsonId(node.id()));
         row.put("_type", resolveTypeName(reader, node.typeId()));
         row.put("_label", resolveEntityLabel(reader, node));
         row.put("_cells", cells);
@@ -891,7 +949,7 @@ public final class GraphTabularService {
     private static Map<String, Object> buildValueRow(GraphReader reader, EntityNode node) {
         String valStr = node.payload().map(GraphTabularService::formatValue).orElse("");
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("_id", node.id().value());
+        row.put("_id", jsonId(node.id()));
         row.put("_type", resolveTypeName(reader, node.typeId()));
         row.put("_label", valStr);
         row.put("_cells", Map.of("_value", valStr));
@@ -948,9 +1006,9 @@ public final class GraphTabularService {
         String col = (sortBy == null || sortBy.isBlank()) ? "_id" : sortBy.trim();
         Comparator<Map<String, Object>> cmp = (a, b) -> {
             if ("_id".equals(col)) {
-                long la = ((Number) a.get("_id")).longValue();
-                long lb = ((Number) b.get("_id")).longValue();
-                return Long.compare(la, lb);
+                EntityId ea = EntityId.parse(String.valueOf(a.get("_id")));
+                EntityId eb = EntityId.parse(String.valueOf(b.get("_id")));
+                return ea.compareTo(eb);
             }
             Map<String, Object> ca = (Map<String, Object>) a.get("_cells");
             Map<String, Object> cb = (Map<String, Object>) b.get("_cells");
@@ -1001,11 +1059,11 @@ public final class GraphTabularService {
 
     private static Map<String, Object> predicateToMap(PredicateMeta pm, long edgeCount) {
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("id", pm.id().value());
+        row.put("id", jsonId(pm.id()));
         row.put("name", pm.name());
-        row.put("domainId", pm.domainId().value());
+        row.put("domainId", jsonId(pm.domainId()));
         row.put("domainName", pm.domainName());
-        row.put("rangeId", pm.rangeId().value());
+        row.put("rangeId", jsonId(pm.rangeId()));
         row.put("rangeName", pm.rangeName());
         row.put("rangeKind", pm.rangeKind());
         row.put("scalarType", pm.scalarType() != null ? pm.scalarType().name() : null);
@@ -1024,12 +1082,12 @@ public final class GraphTabularService {
             boolean outgoing
     ) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("edgeId", edge.id().value());
-        m.put("predicateId", edge.predicateId().value());
+        m.put("edgeId", jsonId(edge.id()));
+        m.put("predicateId", jsonId(edge.predicateId()));
         m.put("predicate", predName);
         EntityId otherId = outgoing ? edge.targetId() : edge.sourceId();
-        m.put(outgoing ? "targetId" : "sourceId", otherId.value());
-        m.put("otherId", otherId.value());
+        m.put(outgoing ? "targetId" : "sourceId", jsonId(otherId));
+        m.put("otherId", jsonId(otherId));
         m.put("otherKind", otherNode != null ? otherNode.kind().name() : "UNKNOWN");
         m.put("otherType", otherNode != null ? resolveTypeName(reader, otherNode.typeId()) : "UNKNOWN");
         m.put("otherLabel", otherNode != null ? resolveEntityLabel(reader, otherNode) : otherId.toString());

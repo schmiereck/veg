@@ -119,7 +119,10 @@ public final class RdfGraphExporter {
             String objIri = resourceIriById.get(obj.id());
             String typeIri = resolveTypeIri(reader, resourceIriById, obj.typeId(), baseNs);
             appendTriple(out, format, baseNs, iriTerm(objIri), RDF_NS + "type", iriTerm(typeIri));
-            appendTriple(out, format, baseNs, iriTerm(objIri), VEG_NS + "entityId", literalTerm(Value.of(obj.id().value())));
+            Value exportedEntityId = obj.id().isUuid()
+                    ? Value.of(obj.id().compactString())
+                    : Value.of(obj.id().value());
+            appendTriple(out, format, baseNs, iriTerm(objIri), VEG_NS + "entityId", literalTerm(exportedEntityId));
             tripleCount += 2;
 
             List<Edge> outgoing = reader.findOutgoingEdges(obj.id()).stream()

@@ -11,6 +11,7 @@ import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.PropagationDirection;
@@ -153,24 +154,52 @@ final class InMemoryTransaction implements GraphTransaction {
         }
     }
 
+    @Override public IdGenerationStrategy idGenerationStrategy() { ensureOpen(); return delegate.idGenerationStrategy(); }
+    @Override public void setIdGenerationStrategy(IdGenerationStrategy strategy) { ensureOpen(); delegate.setIdGenerationStrategy(strategy); }
     @Override public EntityId defineObjectType(String name) { ensureOpen(); return delegate.defineObjectType(name); }
+    @Override public EntityId defineObjectTypeWithId(EntityId explicitId, String name) {
+        ensureOpen();
+        return delegate.defineObjectTypeWithId(explicitId, name);
+    }
     @Override public EntityId defineValueType(String name, ValueType scalarType, boolean uniqueValues) {
         ensureOpen();
         return delegate.defineValueType(name, scalarType, uniqueValues);
+    }
+    @Override public EntityId defineValueTypeWithId(EntityId explicitId, String name, ValueType scalarType, boolean uniqueValues) {
+        ensureOpen();
+        return delegate.defineValueTypeWithId(explicitId, name, scalarType, uniqueValues);
     }
     @Override public EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId, PredicateConstraints constraints) {
         ensureOpen();
         return delegate.definePredicate(name, domainTypeId, rangeTypeId, constraints);
     }
+    @Override public EntityId definePredicateWithId(
+            EntityId explicitId, String name, EntityId domainTypeId, EntityId rangeTypeId, PredicateConstraints constraints
+    ) {
+        ensureOpen();
+        return delegate.definePredicateWithId(explicitId, name, domainTypeId, rangeTypeId, constraints);
+    }
     @Override public EntityId createObject(EntityId objectTypeId) { ensureOpen(); return delegate.createObject(objectTypeId); }
+    @Override public EntityId createObjectWithId(EntityId explicitId, EntityId objectTypeId) {
+        ensureOpen();
+        return delegate.createObjectWithId(explicitId, objectTypeId);
+    }
     @Override public EntityId createValue(EntityId valueTypeId, Value value, ValueMutability mutability) {
         ensureOpen();
         return delegate.createValue(valueTypeId, value, mutability);
+    }
+    @Override public EntityId createValueWithId(EntityId explicitId, EntityId valueTypeId, Value value, ValueMutability mutability) {
+        ensureOpen();
+        return delegate.createValueWithId(explicitId, valueTypeId, value, mutability);
     }
     @Override public void updateValue(EntityId valueEntityId, Value newValue) { ensureOpen(); delegate.updateValue(valueEntityId, newValue); }
     @Override public EntityId connect(EntityId sourceId, EntityId predicateId, EntityId targetId) {
         ensureOpen();
         return delegate.connect(sourceId, predicateId, targetId);
+    }
+    @Override public EntityId connectWithId(EntityId explicitEdgeId, EntityId sourceId, EntityId predicateId, EntityId targetId) {
+        ensureOpen();
+        return delegate.connectWithId(explicitEdgeId, sourceId, predicateId, targetId);
     }
     @Override public void disconnect(EntityId edgeId) { ensureOpen(); delegate.disconnect(edgeId); }
     @Override public void renameSchemaElement(EntityId schemaEntityId, String newName) {

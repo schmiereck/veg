@@ -252,14 +252,29 @@ LIMIT 30</textarea>
 
             <div class="card">
               <div class="card-header">
-                <h3>Commit-Diff vergleichen</h3>
+                <h3>Commit-Diff vergleichen &amp; .vegpatch (Git-Bridge)</h3>
                 <div class="diff-controls">
                   <label>Von <select id="diffFromSelect"></select></label>
                   <label>Nach <select id="diffToSelect"></select></label>
                   <button class="btn btn-primary" id="runDiffBtn">Diff anzeigen</button>
+                  <button class="btn btn-secondary" id="exportPatchBtn">.vegpatch exportieren</button>
                 </div>
               </div>
               <div id="diffOutput" class="diff-output muted">Wählen Sie zwei Commits für den Strukturvergleich.</div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>Git-Patch (.vegpatch) einspielen / 3-Wege-Merge</h3>
+                <div class="diff-controls">
+                  <button class="btn btn-primary" id="mergePatchBtn">In Branch mergen (3-Wege-Merge)</button>
+                  <button class="btn btn-secondary" id="applyPatchBtn">Direkt auf HEAD anwenden</button>
+                </div>
+              </div>
+              <div class="dsl-editor-wrap">
+                <textarea id="patchTextarea" rows="8" spellcheck="false" placeholder="VEG-PATCH v1 ... (über '.vegpatch exportieren' erzeugen oder aus Git-PR einfügen)"></textarea>
+              </div>
+              <div id="patchResultOutput" class="diff-output muted" style="margin-top:8px;">Bereit für Patch-Import oder 3-Wege-Merge.</div>
             </div>
           </div>
         </section>

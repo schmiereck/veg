@@ -7,19 +7,23 @@ import io.veg.cli.kb.ProjectKnowledgeImporter;
 import io.veg.cli.kb.ProjectKnowledgeImporter.ImportReport;
 import io.veg.cli.mcp.VegMcpStdioServer;
 import io.veg.cli.studio.VegStudioServer;
+import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Reason;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Stream;
@@ -107,6 +111,12 @@ final class VegWorkspaceCommands {
         String actorId = "cli-agent";
         String reasonText = null;
         boolean jsonOutput = false;
+        String fromCommitStr = null;
+        String toCommitStr = null;
+        Path patchInputFile = null;
+        Path patchOutputFile = null;
+        PatchApplyMode patchMode = PatchApplyMode.MERGE;
+        IdGenerationStrategy idStrategy = null;
         Map<String, String> createAttrs = new LinkedHashMap<>();
 
         for (int i = 1; i < args.length; i++) {
@@ -148,6 +158,12 @@ final class VegWorkspaceCommands {
                 case "--valid-at" -> validAt = val;
                 case "--actor" -> actorId = val;
                 case "--reason" -> reasonText = val;
+                case "--from" -> fromCommitStr = val;
+                case "--to" -> toCommitStr = val;
+                case "--input" -> patchInputFile = Path.of(val);
+                case "--output" -> patchOutputFile = Path.of(val);
+                case "--mode" -> patchMode = PatchApplyMode.valueOf(val.trim().toUpperCase(Locale.ROOT));
+                case "--id-strategy" -> idStrategy = parseIdStrategy(val);
                 case "--attr" -> {
                     int eq = val.indexOf('=');
                     if (eq <= 0) {
@@ -164,7 +180,7 @@ final class VegWorkspaceCommands {
         }
 
         if (subcommand == null) {
-            err.println("Expected db subcommand: schema | datasheet | query | inspect | commits | set-attr | create-object | connect | disconnect");
+            err.println("Expected db subcommand: schema | datasheet | query | inspect | commits | set-attr | create-object | connect | disconnect | export-patch | apply-patch");
             return 1;
         }
         if (!Files.exists(dbDir)) {
@@ -173,6 +189,9 @@ final class VegWorkspaceCommands {
         }
 
         try (PersistentDiskVersionedDatabase db = PersistentDiskVersionedDatabase.open(dbDir)) {
+            if (idStrategy != null) {
+                db.setIdGenerationStrategy(idStrategy);
+            }
             SnapshotContext ctx = GraphTabularService.resolveContext(db, branch, asOf, validAt);
             Actor actor = Actor.of(actorId, actorId);
             String defaultReason = "CLI db " + subcommand;
@@ -216,7 +235,9 @@ final class VegWorkspaceCommands {
                     if (typeName == null) {
                         throw new IllegalArgumentException("Missing required option --type");
                     }
-                    yield GraphTabularService.createObject(db, ctx.branchName(), actor, reason, typeName, createAttrs);
+                    yield GraphTabularService.createObject(
+                            db, ctx.branchName(), actor, reason, typeName, createAttrs, idStrategy
+                    );
                 }
                 case "connect" -> {
                     if (sourceIdStr == null || predicate == null || targetIdStr == null) {
@@ -238,10 +259,38 @@ final class VegWorkspaceCommands {
                             GraphTabularService.parseEntityId(edgeIdStr)
                     );
                 }
+                case "export-patch" -> {
+                    if (fromCommitStr == null || toCommitStr == null) {
+                        throw new IllegalArgumentException("Missing required options --from and --to");
+                    }
+                    Map<String, Object> exported = GraphTabularService.exportPatch(db, fromCommitStr, toCommitStr);
+                    if (patchOutputFile != null) {
+                        if (patchOutputFile.toAbsolutePath().getParent() != null) {
+                            Files.createDirectories(patchOutputFile.toAbsolutePath().getParent());
+                        }
+                        Files.writeString(patchOutputFile, String.valueOf(exported.get("patchText")), StandardCharsets.UTF_8);
+                    }
+                    yield exported;
+                }
+                case "apply-patch" -> {
+                    if (patchInputFile == null) {
+                        throw new IllegalArgumentException("Missing required option --input");
+                    }
+                    String patchText = Files.readString(patchInputFile, StandardCharsets.UTF_8);
+                    Actor patchActor = actorId.equals("cli-agent") && reasonText == null ? null : actor;
+                    Reason patchReason = reasonText == null ? null : reason;
+                    yield GraphTabularService.applyOrMergePatch(
+                            db, patchText, ctx.branchName(), patchMode, patchActor, patchReason
+                    );
+                }
                 default -> throw new IllegalArgumentException("Unknown db subcommand: " + subcommand);
             };
 
-            if (jsonOutput) {
+            if ("export-patch".equals(subcommand) && !jsonOutput) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = (Map<String, Object>) payload;
+                out.print(m.get("patchText"));
+            } else if (jsonOutput) {
                 out.println(JsonCodec.toJson(payload));
             } else {
                 printReadableDbOutput(subcommand, payload, out);
@@ -350,6 +399,15 @@ final class VegWorkspaceCommands {
             }
             default -> out.println(JsonCodec.toJson(payload));
         }
+    }
+
+    private static IdGenerationStrategy parseIdStrategy(String raw) {
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "sequential", "seq" -> IdGenerationStrategy.SEQUENTIAL;
+            case "uuid-v7", "uuid_v7", "uuidv7", "uuid" -> IdGenerationStrategy.UUID_V7;
+            case "uuid-v4", "uuid_v4", "uuidv4" -> IdGenerationStrategy.UUID_V4;
+            default -> throw new IllegalArgumentException("Unknown id strategy: " + raw);
+        };
     }
 
     private static void deleteRecursively(Path dir) throws IOException {

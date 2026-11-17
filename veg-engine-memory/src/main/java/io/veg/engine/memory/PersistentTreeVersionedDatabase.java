@@ -19,6 +19,7 @@ import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
@@ -96,6 +97,7 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     private String activeBranch = DEFAULT_BRANCH;
     private PersistenceObserver persistenceObserver;
     private Function<CommitId, PersistentGraphSnapshot> coldSnapshotLoader;
+    private volatile IdGenerationStrategy idGenerationStrategy = IdGenerationStrategy.SEQUENTIAL;
 
     public PersistentTreeVersionedDatabase() {
         this.sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
@@ -520,11 +522,13 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
         rwLock.readLock().lock();
         try {
             CommitId head = branchHead(branchName);
+            MutableGraphState baseState = resolveSnapshot(head).toMutableState(sharedUserEntityIdAllocator);
+            baseState.idGenerationStrategy = this.idGenerationStrategy;
             return new InMemoryTransaction(
                     this,
                     branchName,
                     head,
-                    resolveSnapshot(head).toMutableState(sharedUserEntityIdAllocator),
+                    baseState,
                     dataCategory,
                     actor,
                     reason,
@@ -873,10 +877,22 @@ public final class PersistentTreeVersionedDatabase implements VersionedGraphData
     }
 
     @Override
+    public IdGenerationStrategy idGenerationStrategy() {
+        return idGenerationStrategy;
+    }
+
+    @Override
+    public void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        this.idGenerationStrategy = Objects.requireNonNull(strategy, "strategy must not be null");
+    }
+
+    @Override
     public MutableGraphState stateCopyForBranch(String branchName) {
         rwLock.readLock().lock();
         try {
-            return resolveSnapshot(branchHead(branchName)).toMutableState(sharedUserEntityIdAllocator);
+            MutableGraphState copy = resolveSnapshot(branchHead(branchName)).toMutableState(sharedUserEntityIdAllocator);
+            copy.idGenerationStrategy = this.idGenerationStrategy;
+            return copy;
         } finally {
             rwLock.readLock().unlock();
         }

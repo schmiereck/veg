@@ -296,7 +296,7 @@ final class BinaryGraphCodec {
 
             out.writeInt(meta.redactionReceipts().size());
             for (RedactionReceipt r : meta.redactionReceipts()) {
-                out.writeLong(r.redactedEntityId().value());
+                writeEntityId(out, r.redactedEntityId());
                 out.writeLong(r.redactedAt().getEpochSecond());
                 out.writeInt(r.redactedAt().getNano());
                 writeString(out, r.actor().id());
@@ -376,7 +376,7 @@ final class BinaryGraphCodec {
             }
             List<RedactionReceipt> receipts = new ArrayList<>(receiptCount);
             for (int i = 0; i < receiptCount; i++) {
-                EntityId entId = new EntityId(in.readLong());
+                EntityId entId = readEntityId(in);
                 Instant ts = Instant.ofEpochSecond(in.readLong(), in.readInt());
                 Actor actor = new Actor(readString(in), readString(in));
                 Reason reason = Reason.of(readString(in));
@@ -460,7 +460,7 @@ final class BinaryGraphCodec {
             }
             case Change.ValueUpdated(EntityId entityId, Value prev, Value next) -> {
                 out.writeByte(3);
-                out.writeLong(entityId.value());
+                writeEntityId(out, entityId);
                 writeValue(out, prev);
                 writeValue(out, next);
             }
@@ -480,7 +480,7 @@ final class BinaryGraphCodec {
         return switch (tag) {
             case 1 -> new Change.EntityCreated(readEntityNode(in));
             case 2 -> new Change.EntityRemoved(readEntityNode(in));
-            case 3 -> new Change.ValueUpdated(new EntityId(in.readLong()), readValue(in), readValue(in));
+            case 3 -> new Change.ValueUpdated(readEntityId(in), readValue(in), readValue(in));
             case 4 -> new Change.EdgeConnected(readEdge(in));
             case 5 -> new Change.EdgeDisconnected(readEdge(in));
             default -> throw new StorageCorruptionException("Unknown change tag: " + tag);
@@ -488,8 +488,8 @@ final class BinaryGraphCodec {
     }
 
     private static void writeEntityNode(DataOutputStream out, EntityNode node) throws IOException {
-        out.writeLong(node.id().value());
-        out.writeLong(node.typeId().value());
+        writeEntityId(out, node.id());
+        writeEntityId(out, node.typeId());
         out.writeByte(node.kind().ordinal());
         if (node.kind() == EntityKind.VALUE) {
             writeValue(out, node.payload().orElseThrow());
@@ -497,27 +497,45 @@ final class BinaryGraphCodec {
     }
 
     private static EntityNode readEntityNode(DataInputStream in) throws IOException {
-        EntityId id = new EntityId(in.readLong());
-        EntityId typeId = new EntityId(in.readLong());
+        EntityId id = readEntityId(in);
+        EntityId typeId = readEntityId(in);
         EntityKind kind = EntityKind.values()[Byte.toUnsignedInt(in.readByte())];
         Optional<Value> payload = kind == EntityKind.VALUE ? Optional.of(readValue(in)) : Optional.empty();
         return new EntityNode(id, typeId, kind, payload);
     }
 
     private static void writeEdge(DataOutputStream out, Edge edge) throws IOException {
-        out.writeLong(edge.id().value());
-        out.writeLong(edge.sourceId().value());
-        out.writeLong(edge.predicateId().value());
-        out.writeLong(edge.targetId().value());
+        writeEntityId(out, edge.id());
+        writeEntityId(out, edge.sourceId());
+        writeEntityId(out, edge.predicateId());
+        writeEntityId(out, edge.targetId());
     }
 
     private static Edge readEdge(DataInputStream in) throws IOException {
         return new Edge(
-                new EntityId(in.readLong()),
-                new EntityId(in.readLong()),
-                new EntityId(in.readLong()),
-                new EntityId(in.readLong())
+                readEntityId(in),
+                readEntityId(in),
+                readEntityId(in),
+                readEntityId(in)
         );
+    }
+
+    private static void writeEntityId(DataOutputStream out, EntityId id) throws IOException {
+        if (!id.isUuid()) {
+            out.writeLong(id.lsb());
+        } else {
+            out.writeLong(Long.MIN_VALUE);
+            out.writeLong(id.msb());
+            out.writeLong(id.lsb());
+        }
+    }
+
+    private static EntityId readEntityId(DataInputStream in) throws IOException {
+        long first = in.readLong();
+        if (first == Long.MIN_VALUE) {
+            return new EntityId(in.readLong(), in.readLong());
+        }
+        return new EntityId(0L, first);
     }
 
     private static void writeValue(DataOutputStream out, Value value) throws IOException {

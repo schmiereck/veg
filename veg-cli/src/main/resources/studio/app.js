@@ -814,6 +814,47 @@
     }
   };
 
+  const exportVegPatch = async () => {
+    const from = document.getElementById("diffFromSelect").value;
+    const to = document.getElementById("diffToSelect").value;
+    if (!from || !to) return;
+    try {
+      const res = await apiGet("/api/patch", { from, to });
+      document.getElementById("patchTextarea").value = res.patchText;
+      toast(`.vegpatch (${from} → ${to}) exportiert`);
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
+
+  const submitVegPatch = async (mode) => {
+    const patchText = document.getElementById("patchTextarea").value.trim();
+    if (!patchText) {
+      toast("Bitte zuerst einen .vegpatch-Text einfügen oder exportieren.", "error");
+      return;
+    }
+    const out = document.getElementById("patchResultOutput");
+    try {
+      const res = await apiPost("/api/patch", { patchText, mode });
+      out.innerHTML = "";
+      if (res.alreadyApplied) {
+        out.textContent = `Idempotent: Patch ${res.patchId} war bereits auf ${res.targetBranch} enthalten (${res.commitId}).`;
+        toast("Patch bereits enthalten");
+      } else if (res.merged) {
+        out.textContent = `Erfolgreich (${res.mode}) in Branch '${res.targetBranch}' übernommen → Commit ${res.commitId} (Patch ${res.patchId}).`;
+        toast(`Patch gemerged: ${res.commitId}`);
+        await loadAll();
+      } else {
+        out.appendChild(el("strong", { style: "color:var(--danger);", textContent: `Merge-Konflikte (${res.conflicts.length}) — Zielbranch unverändert:` }));
+        out.appendChild(el("ul", { style: "margin:4px 0 0 18px;" },
+          res.conflicts.map((c) => el("li", { textContent: `[${c.type}] Entity #${c.entityId}: ${c.description}` }))));
+        toast("Merge-Konflikt erkannt!", "error");
+      }
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
+
   const setTimeTravel = (commitId) => {
     state.asOf = commitId;
     loadAll();
@@ -946,6 +987,9 @@
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); runDslQuery(); }
     });
     document.getElementById("runDiffBtn").addEventListener("click", runDiff);
+    document.getElementById("exportPatchBtn").addEventListener("click", exportVegPatch);
+    document.getElementById("mergePatchBtn").addEventListener("click", () => submitVegPatch("MERGE"));
+    document.getElementById("applyPatchBtn").addEventListener("click", () => submitVegPatch("APPLY"));
 
     loadAll();
   });

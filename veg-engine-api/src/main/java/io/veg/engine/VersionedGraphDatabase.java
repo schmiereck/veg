@@ -7,6 +7,7 @@ import io.veg.model.CommitId;
 import io.veg.model.DataCategory;
 import io.veg.model.EntityId;
 import io.veg.model.GraphDiff;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
@@ -245,4 +246,14 @@ public interface VersionedGraphDatabase {
     RedactionReceipt redactEntityPayload(EntityId valueEntityId, Actor actor, Reason reason);
 
     List<RedactionReceipt> listRedactionReceipts();
+
+    // --- Distributed ID Generation Strategy ---
+
+    default IdGenerationStrategy idGenerationStrategy() {
+        return IdGenerationStrategy.SEQUENTIAL;
+    }
+
+    default void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        throw new UnsupportedOperationException("Configuring IdGenerationStrategy is not supported on this database");
+    }
 }

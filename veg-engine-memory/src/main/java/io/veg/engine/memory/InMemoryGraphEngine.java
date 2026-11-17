@@ -14,6 +14,7 @@ import io.veg.model.Edge;
 import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.PropagationDirection;
@@ -61,8 +62,24 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
     }
 
     @Override
+    public IdGenerationStrategy idGenerationStrategy() {
+        return state.idGenerationStrategy;
+    }
+
+    @Override
+    public void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        state.idGenerationStrategy = Objects.requireNonNull(strategy, "strategy must not be null");
+    }
+
+    @Override
     public EntityId defineObjectType(String name) {
         return schemaOps.defineObjectType(state, name);
+    }
+
+    @Override
+    public EntityId defineObjectTypeWithId(EntityId explicitId, String name) {
+        Objects.requireNonNull(explicitId, "explicitId must not be null");
+        return schemaOps.defineObjectType(state, explicitId, name);
     }
 
     @Override
@@ -71,8 +88,26 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
     }
 
     @Override
+    public EntityId defineValueTypeWithId(EntityId explicitId, String name, ValueType scalarType, boolean uniqueValues) {
+        Objects.requireNonNull(explicitId, "explicitId must not be null");
+        return schemaOps.defineValueType(state, explicitId, name, scalarType, uniqueValues);
+    }
+
+    @Override
     public EntityId definePredicate(String name, EntityId domainTypeId, EntityId rangeTypeId, PredicateConstraints constraints) {
         return schemaOps.definePredicate(state, name, domainTypeId, rangeTypeId, constraints);
+    }
+
+    @Override
+    public EntityId definePredicateWithId(
+            EntityId explicitId,
+            String name,
+            EntityId domainTypeId,
+            EntityId rangeTypeId,
+            PredicateConstraints constraints
+    ) {
+        Objects.requireNonNull(explicitId, "explicitId must not be null");
+        return schemaOps.definePredicate(state, explicitId, name, domainTypeId, rangeTypeId, constraints);
     }
 
     @Override
@@ -127,19 +162,39 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
 
     @Override
     public EntityId createObject(EntityId objectTypeId) {
+        return createObjectInternal(null, objectTypeId);
+    }
+
+    @Override
+    public EntityId createObjectWithId(EntityId explicitId, EntityId objectTypeId) {
+        Objects.requireNonNull(explicitId, "explicitId must not be null");
+        return createObjectInternal(explicitId, objectTypeId);
+    }
+
+    private EntityId createObjectInternal(EntityId explicitId, EntityId objectTypeId) {
         Objects.requireNonNull(objectTypeId, "objectTypeId must not be null");
         EntityNode typeNode = GraphSchemaValidator.requireEntityExists(state, objectTypeId, "objectTypeId");
         if (!BootstrapIds.META_OBJECT_TYPE.equals(typeNode.typeId())) {
             throw new TypeMismatchException("Expected an object type (META_OBJECT_TYPE), but " + objectTypeId + " has type " + typeNode.typeId());
         }
 
-        EntityId id = state.allocateUserId();
+        EntityId id = state.resolveOrRegisterExplicitId(explicitId);
         mutations.createEntity(state, new EntityNode(id, objectTypeId, EntityKind.OBJECT, Optional.empty()));
         return id;
     }
 
     @Override
     public EntityId createValue(EntityId valueTypeId, Value value, ValueMutability mutability) {
+        return createValueInternal(null, valueTypeId, value, mutability);
+    }
+
+    @Override
+    public EntityId createValueWithId(EntityId explicitId, EntityId valueTypeId, Value value, ValueMutability mutability) {
+        Objects.requireNonNull(explicitId, "explicitId must not be null");
+        return createValueInternal(explicitId, valueTypeId, value, mutability);
+    }
+
+    private EntityId createValueInternal(EntityId explicitId, EntityId valueTypeId, Value value, ValueMutability mutability) {
         Objects.requireNonNull(valueTypeId, "valueTypeId must not be null");
         Objects.requireNonNull(value, "value must not be null");
         Objects.requireNonNull(mutability, "mutability must not be null");
@@ -164,7 +219,7 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
             }
         }
 
-        EntityId id = state.allocateUserId();
+        EntityId id = state.resolveOrRegisterExplicitId(explicitId);
         mutations.createEntity(state, new EntityNode(id, valueTypeId, EntityKind.VALUE, Optional.of(value)));
         mutations.connectEdge(state, state.allocateUserId(), id, BootstrapIds.HAS_MUTABILITY, BootstrapIds.forValueMutability(mutability));
 
@@ -222,6 +277,16 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
 
     @Override
     public EntityId connect(EntityId sourceId, EntityId predicateId, EntityId targetId) {
+        return connectInternal(null, sourceId, predicateId, targetId);
+    }
+
+    @Override
+    public EntityId connectWithId(EntityId explicitEdgeId, EntityId sourceId, EntityId predicateId, EntityId targetId) {
+        Objects.requireNonNull(explicitEdgeId, "explicitEdgeId must not be null");
+        return connectInternal(explicitEdgeId, sourceId, predicateId, targetId);
+    }
+
+    private EntityId connectInternal(EntityId explicitEdgeId, EntityId sourceId, EntityId predicateId, EntityId targetId) {
         Objects.requireNonNull(sourceId, "sourceId must not be null");
         Objects.requireNonNull(predicateId, "predicateId must not be null");
         Objects.requireNonNull(targetId, "targetId must not be null");
@@ -232,7 +297,7 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
 
         GraphSchemaValidator.validateConnection(state, sourceNode, predicateNode, targetNode);
 
-        EntityId edgeId = state.allocateUserId();
+        EntityId edgeId = state.resolveOrRegisterExplicitId(explicitEdgeId);
         mutations.connectEdge(state, edgeId, sourceId, predicateId, targetId);
         return edgeId;
     }

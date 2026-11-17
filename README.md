@@ -84,6 +84,8 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar import-project-docs --db dat
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb schema
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb datasheet --type Invariant --search WAL
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb query --dsl 'MATCH (a:ArchitectureDecision) JOIN (a)-[addressesInvariant]->(i:Invariant) WHERE i.id = "I-17" SELECT a.id, a.title, i.id'
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb export-patch --from c4 --to c5 --output pr.vegpatch
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb apply-patch --input pr.vegpatch --mode merge
 
 # 3. MCP-Stdio-Server für Coding-Agents (konfiguriert in .agents/plugins/veg-mcp/mcp_config.json & .agents/skills/veg-database/SKILL.md)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar mcp --db data/project-kb

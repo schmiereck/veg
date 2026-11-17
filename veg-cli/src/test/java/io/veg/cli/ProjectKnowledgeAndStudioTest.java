@@ -120,6 +120,63 @@ class ProjectKnowledgeAndStudioTest {
         );
         assertThat(editCode).isZero();
         assertThat(outBuf.toString(StandardCharsets.UTF_8)).contains("\"commitId\":\"c7\"");
+
+        // Create UUIDv7 entity, export c7 -> c8 as .vegpatch file, then apply into a clean clone
+        outBuf.reset();
+        int uuidCreateCode = VegCliMain.execute(
+                new String[]{
+                        "db", "--db", dbDir.toString(), "create-object",
+                        "--id-strategy", "uuid-v7",
+                        "--type", "Invariant",
+                        "--attr", "id=I-100",
+                        "--attr", "title=CLI UUID Invariant",
+                        "--actor", "test-agent",
+                        "--reason", "Create UUIDv7 entity",
+                        "--json"
+                },
+                out, err
+        );
+        assertThat(uuidCreateCode).isZero();
+        Map<String, Object> uuidCreated = JsonCodec.parseObject(outBuf.toString(StandardCharsets.UTF_8));
+        String uuidEntityId = String.valueOf(uuidCreated.get("entityId"));
+        assertThat(uuidEntityId).contains("-");
+
+        Path patchFile = tempDir.resolve("pr.vegpatch");
+        outBuf.reset();
+        int exportPatchCode = VegCliMain.execute(
+                new String[]{
+                        "db", "--db", dbDir.toString(), "export-patch",
+                        "--from", "c7", "--to", "c8", "--output", patchFile.toString()
+                },
+                out, err
+        );
+        assertThat(exportPatchCode).isZero();
+        assertThat(Files.readString(patchFile, StandardCharsets.UTF_8))
+                .contains("VEG-PATCH v1", uuidEntityId, "CLI UUID Invariant");
+
+        Path dbClone = tempDir.resolve("kb-clone");
+        assertThat(VegCliMain.execute(
+                new String[]{"import-project-docs", "--db", dbClone.toString(), "--docs-root", repoRoot.toString()},
+                out, err
+        )).isZero();
+        outBuf.reset();
+        int applyPatchCode = VegCliMain.execute(
+                new String[]{
+                        "db", "--db", dbClone.toString(), "apply-patch",
+                        "--input", patchFile.toString(), "--mode", "apply", "--json"
+                },
+                out, err
+        );
+        assertThat(applyPatchCode).isZero();
+        Map<String, Object> applyRes = JsonCodec.parseObject(outBuf.toString(StandardCharsets.UTF_8));
+        assertThat(applyRes.get("merged")).isEqualTo(true);
+
+        outBuf.reset();
+        assertThat(VegCliMain.execute(
+                new String[]{"db", "--db", dbClone.toString(), "inspect", "--id", uuidEntityId, "--json"},
+                out, err
+        )).isZero();
+        assertThat(outBuf.toString(StandardCharsets.UTF_8)).contains("CLI UUID Invariant");
     }
 
     @Test
@@ -186,7 +243,7 @@ class ProjectKnowledgeAndStudioTest {
             assertThat(JsonCodec.asObject(initRes.get("serverInfo")).get("name")).isEqualTo("veg-mcp");
 
             List<Object> tools = JsonCodec.asArray(JsonCodec.asObject(JsonCodec.parseObject(lines.get(1)).get("result")).get("tools"));
-            assertThat(tools).hasSize(6);
+            assertThat(tools).hasSize(7);
 
             Map<String, Object> dsPayload = parseToolTextPayload(lines.get(3));
             assertThat(((Number) dsPayload.get("filteredCount")).intValue()).isGreaterThanOrEqualTo(2);
@@ -209,6 +266,17 @@ class ProjectKnowledgeAndStudioTest {
             Map<String, Object> entityPayload = parseToolTextPayload(inspectResp);
             assertThat(entityPayload.get("typeName")).isEqualTo("GlossaryTerm");
             assertThat(JsonCodec.asArray(entityPayload.get("attributes"))).hasSize(3);
+
+            // Export c5 -> c6 as .vegpatch via veg_patch
+            String patchExportResp = mcp.handleJsonRpcLine(JsonCodec.toJson(Map.of(
+                    "jsonrpc", "2.0", "id", 9, "method", "tools/call",
+                    "params", Map.of("name", "veg_patch", "arguments", Map.of(
+                            "action", "export", "fromCommit", "c5", "toCommit", "c6"
+                    ))
+            )), null);
+            Map<String, Object> exportedPatch = parseToolTextPayload(patchExportResp);
+            assertThat(String.valueOf(exportedPatch.get("patchText")))
+                    .contains("VEG-PATCH v1", "Model Context Protocol");
         }
     }
 
@@ -361,6 +429,49 @@ class ProjectKnowledgeAndStudioTest {
             assertThat(diffResp.statusCode()).isEqualTo(200);
             Map<String, Object> diff = JsonCodec.parseObject(diffResp.body());
             assertThat(diff.get("empty")).isEqualTo(false);
+
+            // Studio GET /api/patch exports text diff for Git/PR workflow
+            HttpResponse<String> patchGetResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/patch?from=c5&to=c6")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(patchGetResp.statusCode()).isEqualTo(200);
+            String patchText = String.valueOf(JsonCodec.parseObject(patchGetResp.body()).get("patchText"));
+            assertThat(patchText).contains("VEG-PATCH v1", "Studio Verified");
+
+            // Studio POST /api/patch merges an exported UUID patch into the DB
+            db.setIdGenerationStrategy(io.veg.model.IdGenerationStrategy.UUID_V7);
+            io.veg.model.CommitId preUuid = db.headCommitId();
+            db.createBranch("temp/pr", preUuid);
+            io.veg.model.CommitId prCommit;
+            try (io.veg.engine.GraphTransaction tx = db.beginTransaction(
+                    "temp/pr", io.veg.model.Actor.user("pr-bot"), io.veg.model.Reason.of("PR via UUID"))) {
+                io.veg.model.EntityId invType = tx.findTypeByName("Invariant").orElseThrow();
+                io.veg.model.EntityId prObj = tx.createObject(invType);
+                tx.connect(prObj, tx.findPredicateByName("id").orElseThrow(),
+                        tx.createValue(tx.findTypeByName("CodeId").orElseThrow(), io.veg.model.Value.of("I-95")));
+                tx.connect(prObj, tx.findPredicateByName("title").orElseThrow(),
+                        tx.createValue(tx.findTypeByName("TitleText").orElseThrow(), io.veg.model.Value.of("UUID PR Invariant")));
+                prCommit = tx.commit();
+            }
+            String uuidPatch = io.veg.engine.VegPatchService.exportPatch(db, preUuid, prCommit);
+
+            HttpResponse<String> patchPostResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/patch"))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(JsonCodec.toJson(Map.of(
+                                    "patchText", uuidPatch,
+                                    "mode", "MERGE",
+                                    "branch", "main"
+                            )), StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(patchPostResp.statusCode()).isEqualTo(200);
+            Map<String, Object> patchRes = JsonCodec.parseObject(patchPostResp.body());
+            assertThat(patchRes.get("merged")).isEqualTo(true);
+            assertThat(db.currentSnapshot().executeQuery("MATCH (i:Invariant) WHERE i.id = \"I-95\" SELECT i.title"))
+                    .hasSize(1);
         }
     }
 

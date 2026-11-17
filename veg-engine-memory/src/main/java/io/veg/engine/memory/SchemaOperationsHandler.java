@@ -30,12 +30,16 @@ final class SchemaOperationsHandler {
     }
 
     EntityId defineObjectType(MutableGraphState state, String name) {
+        return defineObjectType(state, null, name);
+    }
+
+    EntityId defineObjectType(MutableGraphState state, EntityId explicitId, String name) {
         String validName = GraphSchemaValidator.requireValidSchemaName(name);
         if (state.typeByName.containsKey(validName)) {
             throw new DuplicateSchemaElementException("Type already exists: " + validName);
         }
 
-        EntityId typeId = state.allocateUserId();
+        EntityId typeId = state.resolveOrRegisterExplicitId(explicitId);
         mutations.createEntity(state, new EntityNode(typeId, BootstrapIds.META_OBJECT_TYPE, EntityKind.META_TYPE, Optional.empty()));
         mutations.attachMetadataFlag(state, typeId, BootstrapIds.HAS_NAME, Value.of(validName), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         state.typeByName.put(validName, typeId);
@@ -43,13 +47,17 @@ final class SchemaOperationsHandler {
     }
 
     EntityId defineValueType(MutableGraphState state, String name, ValueType scalarType, boolean uniqueValues) {
+        return defineValueType(state, null, name, scalarType, uniqueValues);
+    }
+
+    EntityId defineValueType(MutableGraphState state, EntityId explicitId, String name, ValueType scalarType, boolean uniqueValues) {
         String validName = GraphSchemaValidator.requireValidSchemaName(name);
         Objects.requireNonNull(scalarType, "scalarType must not be null");
         if (state.typeByName.containsKey(validName)) {
             throw new DuplicateSchemaElementException("Type already exists: " + validName);
         }
 
-        EntityId typeId = state.allocateUserId();
+        EntityId typeId = state.resolveOrRegisterExplicitId(explicitId);
         mutations.createEntity(state, new EntityNode(typeId, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, Optional.empty()));
         mutations.attachMetadataFlag(state, typeId, BootstrapIds.HAS_NAME, Value.of(validName), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         mutations.connectEdge(state, state.allocateUserId(), typeId, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.forValueType(scalarType));
@@ -69,6 +77,17 @@ final class SchemaOperationsHandler {
             EntityId rangeTypeId,
             PredicateConstraints constraints
     ) {
+        return definePredicate(state, null, name, domainTypeId, rangeTypeId, constraints);
+    }
+
+    EntityId definePredicate(
+            MutableGraphState state,
+            EntityId explicitId,
+            String name,
+            EntityId domainTypeId,
+            EntityId rangeTypeId,
+            PredicateConstraints constraints
+    ) {
         String validName = GraphSchemaValidator.requireValidSchemaName(name);
         Objects.requireNonNull(domainTypeId, "domainTypeId must not be null");
         Objects.requireNonNull(rangeTypeId, "rangeTypeId must not be null");
@@ -82,7 +101,7 @@ final class SchemaOperationsHandler {
         GraphSchemaValidator.requireSchemaTypeNode(domainNode, "domainTypeId");
         GraphSchemaValidator.requireSchemaTypeNode(rangeNode, "rangeTypeId");
 
-        EntityId predicateId = state.allocateUserId();
+        EntityId predicateId = state.resolveOrRegisterExplicitId(explicitId);
         mutations.createEntity(state, new EntityNode(predicateId, BootstrapIds.META_PREDICATE_TYPE, EntityKind.META_TYPE, Optional.empty()));
         mutations.attachMetadataFlag(state, predicateId, BootstrapIds.HAS_NAME, Value.of(validName), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         mutations.connectEdge(state, state.allocateUserId(), predicateId, BootstrapIds.HAS_DOMAIN, domainTypeId);

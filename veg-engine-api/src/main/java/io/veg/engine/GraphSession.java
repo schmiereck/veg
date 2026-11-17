@@ -1,6 +1,7 @@
 package io.veg.engine;
 
 import io.veg.model.EntityId;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.PropagationDirection;
@@ -96,5 +97,55 @@ public interface GraphSession extends GraphReader {
             setValidityWindow(edgeId, validFrom, validTo);
         }
         return edgeId;
+    }
+
+    // --- Distributed IDs & Patch Replay ---
+
+    default IdGenerationStrategy idGenerationStrategy() {
+        return IdGenerationStrategy.SEQUENTIAL;
+    }
+
+    default void setIdGenerationStrategy(IdGenerationStrategy strategy) {
+        throw new UnsupportedOperationException("ID strategy cannot be changed on this session");
+    }
+
+    default EntityId defineObjectTypeWithId(EntityId explicitId, String name) {
+        return defineObjectType(name);
+    }
+
+    default EntityId defineValueTypeWithId(EntityId explicitId, String name, ValueType scalarType, boolean uniqueValues) {
+        return defineValueType(name, scalarType, uniqueValues);
+    }
+
+    default EntityId definePredicateWithId(
+            EntityId explicitId,
+            String name,
+            EntityId domainTypeId,
+            EntityId rangeTypeId,
+            PredicateConstraints constraints
+    ) {
+        return definePredicate(name, domainTypeId, rangeTypeId, constraints);
+    }
+
+    default EntityId createObjectWithId(EntityId explicitId, EntityId objectTypeId) {
+        return createObject(objectTypeId);
+    }
+
+    default EntityId createValueWithId(
+            EntityId explicitId,
+            EntityId valueTypeId,
+            Value value,
+            ValueMutability mutability
+    ) {
+        return createValue(valueTypeId, value, mutability);
+    }
+
+    default EntityId connectWithId(
+            EntityId explicitEdgeId,
+            EntityId sourceId,
+            EntityId predicateId,
+            EntityId targetId
+    ) {
+        return connect(sourceId, predicateId, targetId);
     }
 }

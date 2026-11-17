@@ -11,6 +11,7 @@ import io.veg.engine.CommitNotFoundException;
 import io.veg.engine.QuerySyntaxException;
 import io.veg.engine.SchemaViolationException;
 import io.veg.engine.VegException;
+import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
@@ -115,6 +116,26 @@ public final class VegStudioServer implements AutoCloseable {
         server.createContext("/api/diff", ex -> handleGetJson(ex, q ->
                 GraphTabularService.diffCommits(db, requireQueryParam(q, "from"), requireQueryParam(q, "to"))
         ));
+        server.createContext("/api/patch", ex -> {
+            if ("GET".equalsIgnoreCase(ex.getRequestMethod())) {
+                handleGetJson(ex, q -> GraphTabularService.exportPatch(
+                        db, requireQueryParam(q, "from"), requireQueryParam(q, "to")));
+            } else {
+                handlePostJson(ex, body -> {
+                    synchronized (mutationLock) {
+                        String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
+                        String modeRaw = JsonCodec.asOptionalString(body, "mode").orElse("MERGE");
+                        PatchApplyMode mode = PatchApplyMode.valueOf(modeRaw.trim().toUpperCase(Locale.ROOT));
+                        Actor actor = JsonCodec.asOptionalString(body, "actor").filter(s -> !s.isBlank())
+                                .map(Actor::user).orElse(null);
+                        Reason reason = JsonCodec.asOptionalString(body, "reason").filter(s -> !s.isBlank())
+                                .map(Reason::of).orElse(null);
+                        return GraphTabularService.applyOrMergePatch(
+                                db, JsonCodec.requireString(body, "patchText"), branch, mode, actor, reason);
+                    }
+                });
+            }
+        });
         server.createContext("/api/query", ex -> handlePostJson(ex, body -> {
             SnapshotContext ctx = GraphTabularService.resolveContext(
                     db,
