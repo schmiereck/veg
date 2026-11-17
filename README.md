@@ -66,7 +66,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [x] **Stufe 0:** Repository, Maven-Multi-Modul-Setup (Java 25 LTS), CI-Pipeline, Test-Oracle & Baseline-Benchmark-Harness
 - [x] **Stufe 1:** Minimalgraph (`EntityId`, `Value`, `Edge`), Bootstrap-Kern im Graph, strenge Typprüfung, `T01`–`T04` & `ADR-0001`/`0002`
 - [x] **Stufe 2:** Identität vs. Wertgleichheit, Shared-Value-Semantik (`IMMUTABLE`/`SHARED_MUTABLE`), Kardinalitäten & `Connection + Assertions` vs. `Edge = Assertion` (`ADR-0003`)
-- [ ] **Stufe 3:** Atomare Transaktionen, Savepoints, unveränderlicher Commit-DAG, `asOf`, `diff`, `revert` (`T05`–`T09`, `T15`)
+- [x] **Stufe 3:** Atomare Transaktionen, Savepoints, unveränderlicher Commit-DAG, `asOf`, `diff`, `revert` & Replay (`T05`–`T09`, `T15`, `ADR-0004`)
 - [ ] **Stufe 4:** Branches mit struktureller Teilung (`T16`), selektives Staging & 3-Wege-Merge (`T10`–`T12`)
 - [ ] **Stufe 5:** Versionsbewusste Berechtigungen (Entity/Relation/Attribut, `T13`–`T14`) & abgeleitete Aussagen
 - [ ] **Stufe 6:** Storage-unabhängige Query-API/DSL & RDF-Export (`T18`)
@@ -85,6 +85,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [ADR-0001: Semantische Aussagen auf Relationen](docs/adr/0001-semantic-assertions-on-relations.md)
 - [ADR-0002: Grenzen des Bootstrap-Kerns](docs/adr/0002-bootstrap-kernel-boundaries.md)
 - [ADR-0003: Shared-Value-Mutabilität, Uniqueness und Kardinalitäten](docs/adr/0003-shared-value-mutation-and-cardinality.md)
+- [ADR-0004: Transaktions-Workspace, Commit-Envelope, Savepoints & Revert](docs/adr/0004-transaction-workspace-and-commit-log.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 
 ## Lizenz

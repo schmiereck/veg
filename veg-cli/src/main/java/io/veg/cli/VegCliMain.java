@@ -8,12 +8,21 @@ import io.veg.benchmarks.BaselineBenchmarkRunner;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkConfig;
 import io.veg.benchmarks.BaselineBenchmarkRunner.BenchmarkReport;
 import io.veg.benchmarks.BaselineBenchmarkRunner.IterationResult;
+import io.veg.engine.GraphReader;
 import io.veg.engine.GraphSession;
+import io.veg.engine.GraphTransaction;
 import io.veg.engine.TypeMismatchException;
+import io.veg.engine.VersionedGraphDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
+import io.veg.engine.memory.InMemoryVersionedDatabase;
+import io.veg.model.Actor;
 import io.veg.model.BootstrapIds;
+import io.veg.model.CommitId;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
+import io.veg.model.GraphDiff;
+import io.veg.model.Reason;
+import io.veg.model.SavepointId;
 import io.veg.model.Value;
 import io.veg.model.ValueType;
 
@@ -104,6 +113,48 @@ public final class VegCliMain {
         out.println("T04: Edge " + edge1 + " annotated via supportedBy(" + loadedProv.id() + ") -> " + loadedProv.targetId()
                 + " and hasConfidence(" + loadedConf.id() + ") -> " + confidence);
         out.println("Graph totals: entities=" + graph.entityCount() + ", edges=" + graph.edgeCount());
+
+        runStage3Demo(out);
+    }
+
+    private static void runStage3Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 3 Versioned Transactions, Savepoints, Diff & Revert Demo ===");
+        VersionedGraphDatabase db = new InMemoryVersionedDatabase();
+        EntityId personType;
+        EntityId firstNameType;
+        EntityId hasFirstName;
+        EntityId person1;
+        CommitId c1;
+
+        try (GraphTransaction tx = db.beginTransaction(Actor.user("u123"), Reason.of("Initial person"), "CRM-1842")) {
+            personType = tx.defineObjectType("Person");
+            firstNameType = tx.defineValueType("FirstName", ValueType.STRING);
+            hasFirstName = tx.definePredicate("hasFirstName", personType, firstNameType);
+            person1 = tx.createObject(personType);
+            tx.connect(person1, hasFirstName, tx.createValue(firstNameType, Value.of("Thomas")));
+            c1 = tx.commit();
+        }
+
+        CommitId c2;
+        try (GraphTransaction tx = db.beginTransaction(Actor.user("u456"), Reason.of("Rename schema & savepoint test"))) {
+            tx.renameSchemaElement(personType, "Customer");
+            SavepointId sp = tx.createSavepoint("after-rename");
+            tx.createObject(personType); // will be rolled back to savepoint
+            tx.rollbackToSavepoint(sp);
+            c2 = tx.commit();
+        }
+
+        GraphDiff diff = db.diff(c1, c2);
+        CommitId c3 = db.revert(c2, Actor.user("admin"), Reason.of("Revert schema rename"));
+        GraphReader replayed = db.replayAsOf(c3);
+
+        out.println("Commits: " + c1 + " -> " + c2 + " -> " + c3);
+        out.println("asOf(" + c1 + ") Person type name = " + db.asOf(c1).resolveName(personType).orElse("?"));
+        out.println("asOf(" + c2 + ") Person type name = " + db.asOf(c2).resolveName(personType).orElse("?"));
+        out.println("diff(" + c1 + ", " + c2 + "): updatedValues=" + diff.updatedValues().size());
+        out.println("After revert(" + c2 + ") at " + c3 + ": diff(" + c1 + ", " + c3 + ").isEmpty()=" + db.diff(c1, c3).isEmpty()
+                + ", replay matches live=" + replayed.allEntities().equals(db.currentSnapshot().allEntities()));
     }
 
     private static int runBenchmark(String[] args, PrintStream out, PrintStream err) throws IOException {

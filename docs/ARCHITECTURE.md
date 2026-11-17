@@ -1,4 +1,4 @@
-# Architektur — Stand Stufe 0 bis Stufe 2
+# Architektur — Stand Stufe 0 bis Stufe 3
 
 ## 1. Schichtenmodell & Modulabhängigkeiten
 
@@ -16,8 +16,16 @@ flowchart LR
 - **`veg-engine-api`:** Trennt konsequent zwischen:
   - `GraphReader` (reine, zustandsfreie Lese- und Traversalsicht)
   - `GraphSession` (erweitert `GraphReader` um typgeprüfte Schema- und Datenmutationen)
-- **`veg-engine-memory`:** Referenzimplementierung (**Engine A**) auf Basis von Standard-`HashMap`s und Adjazenzlisten. Ziel ist maximale Nachvollziehbarkeit der Semantik und das Schaffen einer Baseline — ausdrücklich nicht Speicheroptimalität.
-- **`veg-test-fixtures`:** Backend-unabhängige Contract-Suite (`Stage1ContractTestSuite`) und deterministischer Generator (`DeterministicGraphGenerator`), sodass künftige Engines (B/C) exakt dieselben Korrektheitstests erfüllen müssen (`P-01`).
+- **`veg-engine-memory`:** Referenzimplementierung (**Engine A**), in Stufe 3 modularisiert in kleine, klar getrennte Klassen:
+  - `MutableGraphState` (Graph-Maps, Adjazenzlisten, abgeleitete Indizes, Deep-Copy & Replay)
+  - `AbstractGraphReader` & `InMemoryGraphSnapshot` (gemeinsame `GraphReader`-Basis und unveränderliche Snapshot-Sicht)
+  - `BootstrapKernelInitializer` (Initialisierung des Bootstrap-Kerns `c0`)
+  - `RecordedMutationSink` & `SchemaOperationsHandler` (Change-Protokollierung sowie Schema-Definition & -Evolution)
+  - `GraphSchemaValidator` (Skalar-, Domain/Range-, Kardinalitäts- und Schema-Eindeutigkeitsprüfungen inkl. Bestandsprüfung bei `T06`)
+  - `InMemoryGraphEngine` (schlanke `GraphSession`-Fassade, 221 Zeilen)
+  - `InMemoryTransaction` (isolierter Workspace mit mehrstufigem Savepoint-Stack)
+  - `GraphDiffCalculator` & `InMemoryVersionedDatabase` (`Commit`-Log, `asOf`, `diff`, `revert`, `replayAsOf`)
+- **`veg-test-fixtures`:** Backend-unabhängige Contract-Suiten (`Stage1ContractTestSuite`, `Stage2ContractTestSuite`, `Stage3ContractTestSuite`) und deterministischer Generator (`DeterministicGraphGenerator`), sodass künftige Engines (B/C) exakt dieselben Korrektheitstests erfüllen müssen (`P-01`).
 
 ---
 

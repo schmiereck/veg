@@ -44,4 +44,8 @@ public interface GraphReader {
     long entityCount();
 
     long edgeCount();
+
+    List<EntityNode> allEntities();
+
+    List<Edge> allEdges();
 }

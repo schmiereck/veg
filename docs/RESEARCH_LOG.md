@@ -105,3 +105,48 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 3):**  
   Einführung von Transaktions-Workspaces, Savepoints und unveränderlichen linearen Commits (`CommitId`, Parent, Actor, Reason, Timestamp) inklusive `asOf(commitId)`, `history(entityId)`, `diff(commitA, commitB)`, `revert(commitId)` sowie den Tests `T05`–`T09` und `T15` (Replay über 1.000 deterministische Mutationen).
+
+---
+
+## Eintrag 03 — Stufe 3: Atomare Commits, Savepoints, Historie, Diff, Revert & Replay
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 3** / **Hypothesen H1 (Commit-Envelope) & H4 (Append-only Historie + Snapshots)**:  
+  1. Ein unveränderliches `Commit`-Envelope über 5 atomaren `Change`-Primitiven (`EntityCreated`, `EntityRemoved`, `ValueUpdated`, `EdgeConnected`, `EdgeDisconnected`) vermeidet zirkuläre Bootstrap-Abhängigkeiten und ermöglicht exakte Zustandsrekonstruktion per Replay (`T15`).  
+  2. Isolierte Transaktions-Workspaces mit Savepoint-Stack sowie Schema-Evolution (`renameSchemaElement`, `updatePredicateConstraints`, `enableUniqueValues`) wahren jederzeit atomare Typ- und Bestandsintegrität (`T05`–`T08`).  
+  3. Gegen-Commit-Revert (`T09`) bewahrt die lückenlose Audit-Historie und erkennt Folgekonflikte deterministisch.
+
+- **Implementiert:**  
+  - `veg-model`: `CommitId`, `Actor`, `Reason`, `SavepointId`, `Change` (`sealed interface` mit 5 Varianten), `Commit`, `GraphDiff`.
+  - `veg-engine-api`: `GraphTransaction` (`AutoCloseable` mit Savepoints), `VersionedGraphDatabase`, Schema-Evolution auf `GraphSession` (`renameSchemaElement`, `updatePredicateConstraints`, `enableUniqueValues`), `allEntities()`/`allEdges()` auf `GraphReader`, Exceptions (`TransactionStateException`, `CommitNotFoundException`, `RevertConflictException`).
+  - `veg-engine-memory`: Modularisierung in `MutableGraphState`, `AbstractGraphReader`, `BootstrapKernelInitializer`, `RecordedMutationSink`, `SchemaOperationsHandler`, `GraphSchemaValidator`, `InMemoryGraphEngine` (221 Zeilen), `InMemoryGraphSnapshot`, `InMemoryTransaction`, `GraphDiffCalculator`, `InMemoryVersionedDatabase`.
+  - `veg-test-fixtures` & Tests: `Stage3ContractTestSuite` (23 Testmethoden für `T05`–`T09`, `T15`, Savepoints, `diff`, `historyOf`), `VersionedDatabaseProperties` (`jqwik`, `tries = 30`), `VersionedModelPrimitivesTest`.
+  - `veg-cli`: Erweiterung von `demo` um Stufe-3-Commit-/Savepoint-/Diff-/Revert-/Replay-Ablauf.
+  - Dokumentation: [ADR-0004](adr/0004-transaction-workspace-and-commit-log.md), Erweiterung von [INVARIANTS.md](INVARIANTS.md) (`I-11`–`I-13`) und [ARCHITECTURE.md](ARCHITECTURE.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **52 / 52 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 10 / 10 bestanden (`ModelPrimitivesTest` 6, `VersionedModelPrimitivesTest` 4)
+  - `veg-engine-memory`: 37 / 37 bestanden (`InMemoryStage1ContractTest` 6, `InMemoryStage2ContractTest` 5, `InMemoryStage3ContractTest` 23, `GraphInvariantsProperties` 2 × `tries = 40`, `VersionedDatabaseProperties` 1 × `tries = 30`)
+  - `veg-benchmarks`: 2 / 2 bestanden
+  - `veg-cli`: 3 / 3 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  Reproduzierbarkeit über `T15` (`t15ReplayFromCommitZeroThrough1000DeterministicMutationsMatchesLiveSnapshotExactly`, Seed `42`, > 1.050 Mutationen inkl. Schema-Umbenennung über mehr als 40 Commits) und `VersionedDatabaseProperties` (`tries = 30`): `replayAsOf(c)` liefert für jeden Commit `c0..cHead` exakt identische Entitäten, Kanten und Constraints wie `asOf(c)`.
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt (`H1` / `ADR-0004`):** Das `Commit`-Envelope-Modell vermeidet Selbstreferenz-Zyklen und erlaubt vollständigen Replay ohne Verlust von `entityCount()`-Klarheit.
+  - **Bestätigt (`M-07` / `T05` / `T06`):** Schema-Evolution (Umbenennung mit stabiler `EntityId`, Verschärfung von Kardinalität und Wert-Eindeutigkeit gegen Bestandsdaten) funktioniert historisch nachvollziehbar innerhalb desselben Transaktionsmodells.
+  - **Bestätigt (`T09`):** Konfliktbehaftete Reverts (spätere abhängige Edges oder spätere Wertänderungen) lassen sich präzise abweisen.
+
+- **Risiken und technische Schulden:**  
+  1. `InMemoryVersionedDatabase` speichert aktuell pro Commit einen vollen Snapshot (`MutableGraphState.copy()`) für `O(1)`-`asOf` — in Stufe 4/7 für große Bestände und viele Branches auf strukturelle Teilung (`T16`) umzustellen.
+  2. `nextUserEntityId` ist noch ein linearer Zähler (für parallele Branches in Stufe 4 anzupassen).
+  3. Commit-Historie ist bislang rein linear (`parentId: Optional<CommitId>`), noch kein Branch-DAG mit 3-Wege-Merge.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** mit Stufe 4 (Branches, selektives Staging & struktureller 3-Wege-Merge).
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 4):**  
+  Übergang vom linearen Commit-Log auf einen Branch-/Tag-DAG mit strukturell geteilten Zuständen (`T16`), selektivem Staging mit Abhängigkeitsprüfung (`V-06`) sowie Drei-Wege-Diff/Merge inklusive Konflikterkennung für Daten, gemeinsam genutzte Wertobjekte (`T11`) und Schemaänderungen (`T10`, `T12`).

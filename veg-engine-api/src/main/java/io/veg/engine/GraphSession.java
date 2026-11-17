@@ -41,4 +41,10 @@ public interface GraphSession extends GraphReader {
     EntityId connect(EntityId sourceId, EntityId predicateId, EntityId targetId);
 
     void disconnect(EntityId edgeId);
+
+    void renameSchemaElement(EntityId schemaEntityId, String newName);
+
+    void updatePredicateConstraints(EntityId predicateId, PredicateConstraints newConstraints);
+
+    void enableUniqueValues(EntityId valueTypeId);
 }

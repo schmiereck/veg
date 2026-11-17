@@ -1,6 +1,6 @@
 # Systeminvarianten (VEG)
 
-Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müssen diese Invarianten zu jedem Zeitpunkt einhalten. Die Verifikation erfolgt über `Stage1ContractTestSuite`, `Stage2ContractTestSuite` und die Property-Based Tests (`GraphInvariantsProperties`).
+Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müssen diese Invarianten zu jedem Zeitpunkt einhalten. Die Verifikation erfolgt über `Stage1ContractTestSuite`, `Stage2ContractTestSuite`, `Stage3ContractTestSuite` und die Property-Based Tests (`GraphInvariantsProperties`, `VersionedDatabaseProperties`).
 
 | ID | Invariante | Beschreibung & Prüfkriterium |
 |---|---|---|
@@ -14,3 +14,6 @@ Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müss
 | **I-08** | **Unveränderlicher Bootstrap-Kern** | Bootstrap-Entitäten und strukturelle Schema-Kanten (`HAS_NAME`, `HAS_SCALAR_TYPE`, `HAS_DOMAIN`, `HAS_RANGE`, `HAS_MAX_OUTGOING`, `HAS_MAX_INCOMING`, `HAS_UNIQUE_TRIPLE`, `HAS_UNIQUE_VALUES`, `HAS_MUTABILITY`) können nicht durch reguläre `disconnect`-Aufrufe entfernt werden. |
 | **I-09** | **Explizite Shared-Mutation-Semantik** | Jeder `VALUE`-Knoten besitzt eine explizite `ValueMutability` (`IMMUTABLE` als Default). In-Place-Updates via `updateValue` sind ausschließlich für benutzerdefinierte `SHARED_MUTABLE`-Knoten unter Wahrung von Skalartyp und `uniqueValues` zulässig. |
 | **I-10** | **Prädikat-Kardinalität & Uniqueness** | Ein `connect` darf weder `maxOutgoing`, `maxIncoming` noch `uniqueTriple` des Prädikats überschreiten; `createValue`/`updateValue` darf bei `uniqueValues = true` keine Duplikate erzeugen. Alle Verstöße scheitern atomar. |
+| **I-11** | **Unveränderliche Snapshots & Transaktions-Isolation** | Offene Transaktionsänderungen bleiben bis zum `commit()` unsichtbar; ältere Snapshots (`asOf(commitId)`) mutieren durch spätere Commits oder Schemaänderungen niemals. |
+| **I-12** | **Deterministische Replay-Äquivalenz** | Das Abspielen der persistierten `Change`-Liste aller Commits von `c0` bis `cN` (`replayAsOf(cN)`) erzeugt exakt denselben Graph- und Schema-Zustand wie `asOf(cN)` (`T15`). |
+| **I-13** | **Historien-erhaltender Revert** | Ein `revert(commitId)` löscht keinen bestehenden Commit, sondern erzeugt einen neuen Gegen-Commit (`V-10`); Konflikte durch spätere Abhängigkeiten scheitern atomar mit `RevertConflictException`. |
