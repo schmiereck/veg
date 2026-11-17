@@ -94,15 +94,41 @@ final class ThreeWayMergeEngine {
         CommitId baseCommitId = findCommonAncestor(commits, sourceCommitId, targetCommitId);
         MutableGraphState baseState = stateLookup.apply(baseCommitId);
         MutableGraphState targetState = stateLookup.apply(targetCommitId);
-        InMemoryGraphSnapshot baseSnap = new InMemoryGraphSnapshot(baseState);
-        InMemoryGraphSnapshot targetSnap = new InMemoryGraphSnapshot(targetState);
         MutableGraphState sourceState = buildFilteredSourceState(
                 commits, stateLookup, baseCommitId, sourceCommitId, policy);
-        InMemoryGraphSnapshot effectiveSourceSnap = new InMemoryGraphSnapshot(sourceState);
 
         if (baseCommitId.equals(sourceCommitId)) {
             return new PreparedMerge(true, baseCommitId, targetState.copy(), List.of(), List.of());
         }
+
+        return prepareFromStates(baseCommitId, baseState, sourceCommitId, sourceState, targetCommitId, targetState);
+    }
+
+    static PreparedMerge prepareCherryPick(
+            List<Commit> commits,
+            Function<CommitId, MutableGraphState> stateLookup,
+            CommitId sourceCommitId,
+            CommitId targetCommitId
+    ) {
+        Commit sourceCommit = commits.get((int) sourceCommitId.value());
+        CommitId parentBaseId = sourceCommit.parentId().orElse(CommitId.BOOTSTRAP);
+        MutableGraphState baseState = stateLookup.apply(parentBaseId);
+        MutableGraphState sourceState = stateLookup.apply(sourceCommitId);
+        MutableGraphState targetState = stateLookup.apply(targetCommitId);
+        return prepareFromStates(parentBaseId, baseState, sourceCommitId, sourceState, targetCommitId, targetState);
+    }
+
+    private static PreparedMerge prepareFromStates(
+            CommitId baseCommitId,
+            MutableGraphState baseState,
+            CommitId sourceCommitId,
+            MutableGraphState sourceState,
+            CommitId targetCommitId,
+            MutableGraphState targetState
+    ) {
+        InMemoryGraphSnapshot baseSnap = new InMemoryGraphSnapshot(baseState);
+        InMemoryGraphSnapshot targetSnap = new InMemoryGraphSnapshot(targetState);
+        InMemoryGraphSnapshot effectiveSourceSnap = new InMemoryGraphSnapshot(sourceState);
 
         GraphDiff sourceDiff = GraphDiffCalculator.compute(baseCommitId, baseSnap, sourceCommitId, effectiveSourceSnap);
         GraphDiff targetDiff = GraphDiffCalculator.compute(baseCommitId, baseSnap, targetCommitId, targetSnap);

@@ -10,6 +10,8 @@ import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
+import java.time.Instant;
+
 /**
  * Mutable session against a VEG graph state.
  *
@@ -76,5 +78,23 @@ public interface GraphSession extends GraphReader {
 
     default RdfImportResult importTurtle(String turtleContent) {
         return RdfGraphImporter.importRdf(this, turtleContent, RdfFormat.TURTLE);
+    }
+
+    // --- Stage 10: Bitemporal business validity bounds (V-14) ---
+
+    void setValidityWindow(EntityId targetEntityOrEdgeId, Instant validFrom, Instant validTo);
+
+    default EntityId connectWithValidity(
+            EntityId sourceId,
+            EntityId predicateId,
+            EntityId targetId,
+            Instant validFrom,
+            Instant validTo
+    ) {
+        EntityId edgeId = connect(sourceId, predicateId, targetId);
+        if (validFrom != null || validTo != null) {
+            setValidityWindow(edgeId, validFrom, validTo);
+        }
+        return edgeId;
     }
 }

@@ -372,3 +372,44 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 10):**  
   Implementierung von MVCC-Snapshot-Isolation für konkurrierende Reader und parallele Transaktionen auf Basis der `PersistentTreeVersionedDatabase` / `PersistentDiskVersionedDatabase`-Struktur sowie gezielter Reachability-/Prädikat-Indizes zur Senkung der `W3` 5-Hop+ACL-Latenz.
+
+---
+
+## Eintrag 09 — Stufe 10: Multi-User MVCC, automatische Typ-Indizes & ACL-Caching, Bitemporalität, Cherry-Pick & DSGVO-Redaktion
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 10** (`P-05`, `V-14`, `V-15`, `V-16`, `S-09`, Mehrbenutzer-MVCC):  
+  1. Lock-freie Snapshot-Reads kombiniert mit kurz gehaltenem `ReentrantReadWriteLock`, typisierter `OptimisticCommitConflictException`, `executeWithRetry` und 64-fach gestriptem `executeIdempotent` tragen parallele Reader & konkurrierende Schreiber über alle Backends (A, B1, B2, C und Disk) ohne Deadlocks oder Duplikat-Commits.  
+  2. Automatische Typ-Indizes (`findEntitiesByType`) + `SnapshotAclCache` (`P-05`), bitemporale Gültigkeitsfenster `[validFrom, validTo)` (`V-14`), selektiver Cherry-Pick (`V-16`) und typtreue DSGVO-Payload-Redaktion (`S-09`) lassen sich ohne semantische Brüche in den selbstbeschreibenden Graphen integrieren und über Disk-Neustarts hinweg sichern.
+
+- **Implementiert:**  
+  - `veg-model`: Erweiterung von `BootstrapIds` (`SYSTEM_TIMESTAMP_VALUE_TYPE`, `VALID_FROM`, `VALID_TO`), neue Primitiven `ValidityWindow` (halboffenes Intervall `[validFrom, validTo)`), `RedactionReceipt` (SHA-256-Nachweis) sowie `Stage10ModelTest` (2 Tests).
+  - `veg-engine-api`: `OptimisticCommitConflictException`, `BitemporalGraphReader`, Erweiterung von `GraphReader` (`findEntitiesByType`, `resolveValidityWindow`, `validAt`), `GraphSession` (`setValidityWindow`, `connectWithValidity`), `GraphQuery` (`findEntitiesByType`-Nutzung) sowie `VersionedGraphDatabase` (`commitsByCorrelationId`, `executeWithRetry`, `executeIdempotent`, `cherryPick`, `asOfBitemporal`, `asOfSystemAndValidTime`, `redactEntityPayload`, `listRedactionReceipts`).
+  - `veg-engine-memory`: `SnapshotAclCache`, `IdempotentCommitSupport`, `RedactionEngine`, `ThreeWayMergeEngine.prepareCherryPick`, automatischer Typ-Index in `MutableGraphState`, `CompactGraphSnapshot` (CSR-Typindex) & `PersistentGraphSnapshot` (`PersistentLongMap<List<EntityNode>>`), `BootstrapKernelInitializer`, `InMemoryGraphEngine`/`Transaction`/`StagingWorkspace` (`setValidityWindow`, `OptimisticCommitConflictException`) sowie MVCC-Integration in `InMemoryVersionedDatabase`, `CompactVersionedDatabase` und `PersistentTreeVersionedDatabase`.
+  - `veg-engine-persistent`: Persistenz von `idempotentCommits` und `redactionReceipts` in `BinaryGraphCodec`/`refs.meta`, lock-freies Öffnen paralleler Transaktionen sowie vollständige Disk-Bereinigung bei `redactEntityPayload` (Rewrite von WAL, Checkpoints, Kaltarchiv-Segmenten und `coldCache`).
+  - `veg-test-fixtures` & Tests: `Stage10ContractTestSuite` (10 Tests) ausgeführt auf **allen 5 Backend-Konfigurationen** (`InMemoryStage10ContractTest`, `CompactEngineContractTest` B1+B2, `PersistentTreeEngineContractTest` C, `PersistentDiskContractTest` Disk) + Restart-Test in `Stage8PersistenceAndRecoveryTest`.
+  - `veg-cli` & Doku: `runStage10Demo` in `VegCliMain`, Assertion in `VegCliMainTest`, [ADR-0010](adr/0010-mvcc-auto-indexing-bitemporality-and-gdpr-redaction.md), [INVARIANTS.md](INVARIANTS.md) (`I-25`–`I-28`), [ARCHITECTURE.md](ARCHITECTURE.md), [CONCEPT.md](CONCEPT.md), [README.md](../README.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **528 / 528 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: **21 / 21** bestanden
+  - `veg-engine-memory`: **390 / 390** bestanden (Engine A 104 inkl. `jqwik`, B1+B2 186, C 100)
+  - `veg-engine-persistent`: **109 / 109** bestanden (`PersistentDiskContractTest` Stage 1–6+10 = 98 + `Stage8PersistenceAndRecoveryTest` = 11)
+  - `veg-benchmarks`: **3 / 3** bestanden
+  - `veg-cli`: **5 / 5** bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  - `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo`: Exit-Code `0` (`VEG Stage 10 ... Type-indexed contractors=3, bitemporal valid(Feb)=1, valid(Apr)=0`, `Idempotent retry sameCommit=true, cherryPickSucceeded=true, correlatedHR100=2, redactedValue=StringValue[value=[REDACTED]], redactionAffectedCommits=1`).
+  - Multithreaded MVCC-Stresstest (`4` Writer-Threads × `5` Retries + `4` parallele Reader-Threads × `30` Snapshot-Reads) terminiert deterministisch und konsistent über alle 5 Backends.
+  - Physischer Disk-Redaction-Test (`stage10_bitemporalIdempotencyAndGdprRedactionSurviveRestartAndPurgeDiskArtifacts`) bestätigt, dass rohe PII-Bytes aus `wal.log`, Checkpoints und Kaltarchiv nach `redactEntityPayload` vollständig entfernt und `idempotencyKey` sowie `[validFrom, validTo)` nach Neustart aktiv bleiben.
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt:** Strukturell unveränderliche Radix-32-Tries (Engine C) erlauben echtes lock-freies Lesen auf historischen und aktuellen Snapshots bei sauberer Serialisierung konkurrierender Commits.
+  - **Wichtiges Detail bei Redaction + Kaltarchiv:** Beim Rebuild heißer Post-Archiv-Checkpoints während `redactEntityPayload` darf niemals auf noch nicht umgeschriebene kalte Checkpoints auf Disk zurückgegriffen werden (`metaStore = null` während Rebuild).
+
+- **Risiken und offene Zukunftsoptionen:**  
+  - Verteiltes Multi-Master-Merging (`V-17`), automatischer Kosten-basierter Query-Optimizer (`P-10`), HA-Replikation und der niedrig priorisierte **Oracle-CDC-/Outbox-Adapter (`Stufe 9 / P3`)** bleiben bei Bedarf als eigenständige Erweiterungsstränge offen.
+
+- **Entscheidung:**  
+  **Meilenstein Stufe 10 abgeschlossen!** Alle Kernziele des R&D-Konzepts (Stufen 0–8 & Stufe 10) sind implementiert, gemessen und durchgängig über sämtliche Backends verifiziert.

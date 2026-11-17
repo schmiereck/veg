@@ -2,9 +2,9 @@ package io.veg.engine.memory;
 
 import io.veg.engine.EntityNotFoundException;
 import io.veg.engine.MissingDependencyException;
+import io.veg.engine.OptimisticCommitConflictException;
 import io.veg.engine.SchemaViolationException;
 import io.veg.engine.StagingWorkspace;
-import io.veg.engine.TransactionStateException;
 import io.veg.model.Actor;
 import io.veg.model.Change;
 import io.veg.model.CommitId;
@@ -20,6 +20,7 @@ import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -127,8 +128,7 @@ final class InMemoryStagingWorkspace extends AbstractGraphReader implements Stag
 
         CommitId currentBranchHead = database.branchHead(branchName);
         if (!baseCommitId.equals(currentBranchHead)) {
-            throw new TransactionStateException(
-                    "Branch '" + branchName + "' moved from " + baseCommitId + " to " + currentBranchHead);
+            throw new OptimisticCommitConflictException(branchName, baseCommitId, currentBranchHead);
         }
 
         List<Change> toCommit = stagedChanges();
@@ -351,5 +351,12 @@ final class InMemoryStagingWorkspace extends AbstractGraphReader implements Stag
         int start = rawRecorder.size();
         delegate.defineSubPredicate(subPredicateId, superPredicateId);
         recordGroup(subPredicateId, start);
+    }
+
+    @Override
+    public void setValidityWindow(EntityId targetEntityOrEdgeId, Instant validFrom, Instant validTo) {
+        int start = rawRecorder.size();
+        delegate.setValidityWindow(targetEntityOrEdgeId, validFrom, validTo);
+        recordGroup(targetEntityOrEdgeId, start);
     }
 }

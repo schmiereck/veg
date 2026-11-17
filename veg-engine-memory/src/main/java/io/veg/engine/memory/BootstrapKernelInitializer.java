@@ -38,6 +38,7 @@ final class BootstrapKernelInitializer {
         registerType(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Identifier");
         registerType(BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Int");
         registerType(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Boolean");
+        registerType(BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE, BootstrapIds.META_VALUE_TYPE, EntityKind.META_TYPE, "veg.meta.Timestamp");
 
         registerType(BootstrapIds.SCALAR_STRING, BootstrapIds.META_TYPE, EntityKind.SCALAR_TYPE, "veg.scalar.String");
         registerType(BootstrapIds.SCALAR_INT, BootstrapIds.META_TYPE, EntityKind.SCALAR_TYPE, "veg.scalar.Int");
@@ -78,14 +79,18 @@ final class BootstrapKernelInitializer {
         registerPredicate(BootstrapIds.PROPAGATION_PERMISSION, "veg.acl.propagationPermission");
         registerPredicate(BootstrapIds.HAS_INVERSE_PREDICATE, "veg.meta.hasInversePredicate");
         registerPredicate(BootstrapIds.HAS_SUPER_PREDICATE, "veg.meta.hasSuperPredicate");
+        registerPredicate(BootstrapIds.VALID_FROM, "veg.time.validFrom");
+        registerPredicate(BootstrapIds.VALID_TO, "veg.time.validTo");
 
         addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_STRING);
         addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_INT);
         addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_BOOLEAN);
+        addEdge(state.allocateBootstrapAuxId(), BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE, BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.SCALAR_TIMESTAMP);
 
         attachFlag(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
         attachFlag(BootstrapIds.SYSTEM_INT_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
         attachFlag(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
+        attachFlag(BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE, BootstrapIds.HAS_UNIQUE_VALUES, false);
 
         attachName(BootstrapIds.META_TYPE, "veg.meta.MetaType");
         attachName(BootstrapIds.META_OBJECT_TYPE, "veg.meta.ObjectType");
@@ -95,6 +100,7 @@ final class BootstrapKernelInitializer {
         attachName(BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE, "veg.meta.Identifier");
         attachName(BootstrapIds.SYSTEM_INT_VALUE_TYPE, "veg.meta.Int");
         attachName(BootstrapIds.SYSTEM_BOOLEAN_VALUE_TYPE, "veg.meta.Boolean");
+        attachName(BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE, "veg.meta.Timestamp");
 
         attachName(BootstrapIds.SCALAR_STRING, "veg.scalar.String");
         attachName(BootstrapIds.SCALAR_INT, "veg.scalar.Int");
@@ -135,6 +141,8 @@ final class BootstrapKernelInitializer {
         attachName(BootstrapIds.PROPAGATION_PERMISSION, "veg.acl.propagationPermission");
         attachName(BootstrapIds.HAS_INVERSE_PREDICATE, "veg.meta.hasInversePredicate");
         attachName(BootstrapIds.HAS_SUPER_PREDICATE, "veg.meta.hasSuperPredicate");
+        attachName(BootstrapIds.VALID_FROM, "veg.time.validFrom");
+        attachName(BootstrapIds.VALID_TO, "veg.time.validTo");
 
         attachPredicateMeta(BootstrapIds.HAS_NAME, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_SCALAR_TYPE, BootstrapIds.META_VALUE_TYPE, BootstrapIds.META_TYPE);
@@ -156,6 +164,8 @@ final class BootstrapKernelInitializer {
         attachPredicateMeta(BootstrapIds.PROPAGATION_PERMISSION, BootstrapIds.META_PROPAGATION_RULE_TYPE, BootstrapIds.SYSTEM_IDENTIFIER_VALUE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_INVERSE_PREDICATE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.META_PREDICATE_TYPE);
         attachPredicateMeta(BootstrapIds.HAS_SUPER_PREDICATE, BootstrapIds.META_PREDICATE_TYPE, BootstrapIds.META_PREDICATE_TYPE);
+        attachPredicateMeta(BootstrapIds.VALID_FROM, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE);
+        attachPredicateMeta(BootstrapIds.VALID_TO, BootstrapIds.ANY_ENTITY, BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE);
     }
 
     private void registerType(EntityId id, EntityId metaTypeId, EntityKind kind, String name) {

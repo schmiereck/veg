@@ -223,8 +223,8 @@ public final class GraphQuery {
             return List.of();
         }
         EntityId typeId = typeIdOpt.get();
-        List<EntityId> matchingEntities = reader.allEntities().stream()
-                .filter(n -> n.kind() == EntityKind.OBJECT && n.typeId().equals(typeId))
+        List<EntityId> matchingEntities = reader.findEntitiesByType(typeId).stream()
+                .filter(n -> n.kind() == EntityKind.OBJECT)
                 .map(EntityNode::id)
                 .sorted()
                 .toList();

@@ -20,6 +20,7 @@ import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -207,6 +208,10 @@ final class InMemoryTransaction implements GraphTransaction {
         ensureOpen();
         delegate.defineSubPredicate(subPredicateId, superPredicateId);
     }
+    @Override public void setValidityWindow(EntityId targetEntityOrEdgeId, Instant validFrom, Instant validTo) {
+        ensureOpen();
+        delegate.setValidityWindow(targetEntityOrEdgeId, validFrom, validTo);
+    }
 
     @Override public Optional<EntityNode> findEntity(EntityId id) { ensureOpen(); return delegate.findEntity(id); }
     @Override public Optional<Edge> findEdge(EntityId edgeId) { ensureOpen(); return delegate.findEdge(edgeId); }
@@ -234,6 +239,10 @@ final class InMemoryTransaction implements GraphTransaction {
     }
     @Override public long entityCount() { ensureOpen(); return delegate.entityCount(); }
     @Override public long edgeCount() { ensureOpen(); return delegate.edgeCount(); }
+    @Override public List<EntityNode> findEntitiesByType(EntityId typeId) {
+        ensureOpen();
+        return delegate.findEntitiesByType(typeId);
+    }
     @Override public List<EntityNode> allEntities() { ensureOpen(); return delegate.allEntities(); }
     @Override public List<Edge> allEdges() { ensureOpen(); return delegate.allEdges(); }
     @Override public Optional<EntityId> findPrincipalByName(String principalId) { ensureOpen(); return delegate.findPrincipalByName(principalId); }

@@ -8,6 +8,7 @@ import io.veg.fixtures.Stage3ContractTestSuite;
 import io.veg.fixtures.Stage4ContractTestSuite;
 import io.veg.fixtures.Stage5ContractTestSuite;
 import io.veg.fixtures.Stage6ContractTestSuite;
+import io.veg.fixtures.Stage10ContractTestSuite;
 import io.veg.model.Actor;
 import io.veg.model.Reason;
 import org.junit.jupiter.api.AfterEach;
@@ -88,6 +89,14 @@ class PersistentDiskContractTest {
 
     @Nested
     class DiskStage6 extends Stage6ContractTestSuite {
+        @Override
+        protected VersionedGraphDatabase createDatabase() {
+            return openFreshDatabase();
+        }
+    }
+
+    @Nested
+    class DiskStage10 extends Stage10ContractTestSuite {
         @Override
         protected VersionedGraphDatabase createDatabase() {
             return openFreshDatabase();

@@ -12,6 +12,7 @@ import io.veg.model.EntityId;
 import io.veg.model.EntityKind;
 import io.veg.model.EntityNode;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.Tag;
 import io.veg.model.Value;
 
@@ -56,7 +57,9 @@ final class BinaryGraphCodec {
             Map<String, Set<String>> branchReadRestrictions,
             Optional<CommitId> latestCheckpointId,
             Optional<CommitId> archivedUpToCommitId,
-            long nextUserEntityId
+            long nextUserEntityId,
+            Map<String, CommitId> idempotentCommits,
+            List<RedactionReceipt> redactionReceipts
     ) {
     }
 
@@ -284,6 +287,24 @@ final class BinaryGraphCodec {
             writeOptionalCommitId(out, meta.latestCheckpointId());
             writeOptionalCommitId(out, meta.archivedUpToCommitId());
             out.writeLong(meta.nextUserEntityId());
+
+            out.writeInt(meta.idempotentCommits().size());
+            for (var entry : meta.idempotentCommits().entrySet()) {
+                writeString(out, entry.getKey());
+                out.writeLong(entry.getValue().value());
+            }
+
+            out.writeInt(meta.redactionReceipts().size());
+            for (RedactionReceipt r : meta.redactionReceipts()) {
+                out.writeLong(r.redactedEntityId().value());
+                out.writeLong(r.redactedAt().getEpochSecond());
+                out.writeInt(r.redactedAt().getNano());
+                writeString(out, r.actor().id());
+                writeString(out, r.actor().displayName());
+                writeString(out, r.reason().text());
+                writeString(out, r.originalPayloadSha256());
+                out.writeInt(r.affectedCommitCount());
+            }
             out.flush();
             return wrapEnvelope(MAGIC_REFS, baos.toByteArray());
         } catch (IOException ex) {
@@ -339,10 +360,37 @@ final class BinaryGraphCodec {
             Optional<CommitId> latestCkpt = readOptionalCommitId(in);
             Optional<CommitId> archivedUpTo = readOptionalCommitId(in);
             long nextEntityId = in.readLong();
+
+            int idemCount = in.readInt();
+            if (idemCount < 0) {
+                throw new StorageCorruptionException("Negative idempotent key count in refs.meta");
+            }
+            Map<String, CommitId> idempotentCommits = new LinkedHashMap<>(idemCount);
+            for (int i = 0; i < idemCount; i++) {
+                idempotentCommits.put(readString(in), new CommitId(in.readLong()));
+            }
+
+            int receiptCount = in.readInt();
+            if (receiptCount < 0) {
+                throw new StorageCorruptionException("Negative redaction receipt count in refs.meta");
+            }
+            List<RedactionReceipt> receipts = new ArrayList<>(receiptCount);
+            for (int i = 0; i < receiptCount; i++) {
+                EntityId entId = new EntityId(in.readLong());
+                Instant ts = Instant.ofEpochSecond(in.readLong(), in.readInt());
+                Actor actor = new Actor(readString(in), readString(in));
+                Reason reason = Reason.of(readString(in));
+                String sha = readString(in);
+                int count = in.readInt();
+                receipts.add(new RedactionReceipt(entId, ts, actor, reason, sha, count));
+            }
+
             if (in.available() != 0) {
                 throw new StorageCorruptionException("Trailing bytes in refs.meta");
             }
-            return new RefsMetadata(activeBranch, branches, tags, restrictions, latestCkpt, archivedUpTo, nextEntityId);
+            return new RefsMetadata(
+                    activeBranch, branches, tags, restrictions, latestCkpt, archivedUpTo, nextEntityId,
+                    Map.copyOf(idempotentCommits), List.copyOf(receipts));
         } catch (StorageCorruptionException ex) {
             throw ex;
         } catch (IOException | RuntimeException ex) {

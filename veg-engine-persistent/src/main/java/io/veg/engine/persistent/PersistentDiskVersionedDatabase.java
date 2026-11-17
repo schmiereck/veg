@@ -20,6 +20,7 @@ import io.veg.model.GraphDiff;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.Tag;
 
 import java.io.IOException;
@@ -406,7 +407,7 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
     }
 
     @Override
-    public synchronized GraphTransaction beginTransaction(
+    public GraphTransaction beginTransaction(
             String branchName,
             Actor actor,
             Reason reason,
@@ -417,7 +418,7 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
     }
 
     @Override
-    public synchronized StagingWorkspace createStagingWorkspace(String branchName) {
+    public StagingWorkspace createStagingWorkspace(String branchName) {
         return delegate.createStagingWorkspace(branchName);
     }
 
@@ -477,6 +478,33 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
     @Override
     public AuthorizedGraphReader authorizedAsOf(CommitId commitId, String principalId) {
         return delegate.authorizedAsOf(commitId, principalId);
+    }
+
+    @Override
+    public CommitId executeIdempotent(
+            String branchName,
+            String idempotencyKey,
+            Actor actor,
+            Reason reason,
+            String correlationId,
+            Consumer<GraphTransaction> work
+    ) {
+        return delegate.executeIdempotent(branchName, idempotencyKey, actor, reason, correlationId, work);
+    }
+
+    @Override
+    public synchronized MergeResult cherryPick(CommitId sourceCommitId, String targetBranch, Actor actor, Reason reason) {
+        return delegate.cherryPick(sourceCommitId, targetBranch, actor, reason);
+    }
+
+    @Override
+    public synchronized RedactionReceipt redactEntityPayload(EntityId valueEntityId, Actor actor, Reason reason) {
+        return delegate.redactEntityPayload(valueEntityId, actor, reason);
+    }
+
+    @Override
+    public List<RedactionReceipt> listRedactionReceipts() {
+        return delegate.listRedactionReceipts();
     }
 
     @Override
@@ -563,6 +591,8 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
         String activeBranch = DEFAULT_BRANCH;
         Optional<CommitId> archivedUpTo = Optional.empty();
         long refsNextEntityId = EntityId.USER_MIN_ID;
+        Map<String, CommitId> recoveredIdempotent = Map.of();
+        List<RedactionReceipt> recoveredReceipts = List.of();
 
         if (optRefs.isPresent()) {
             BinaryGraphCodec.RefsMetadata refs = optRefs.get();
@@ -572,6 +602,8 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
             restrictions.putAll(refs.branchReadRestrictions());
             archivedUpTo = refs.archivedUpToCommitId();
             refsNextEntityId = refs.nextUserEntityId();
+            recoveredIdempotent = refs.idempotentCommits();
+            recoveredReceipts = refs.redactionReceipts();
         } else {
             branches.put(DEFAULT_BRANCH, new Branch(DEFAULT_BRANCH, CommitId.BOOTSTRAP));
         }
@@ -589,7 +621,9 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
                 tags,
                 restrictions,
                 activeBranch,
-                recoveredNextEntityId
+                recoveredNextEntityId,
+                recoveredIdempotent,
+                recoveredReceipts
         );
 
         RecoveryReport report = new RecoveryReport(
@@ -737,7 +771,7 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
                 base = cached.get();
                 break;
             }
-            if (metaStore.hasCheckpoint(cursor)) {
+            if (metaStore != null && metaStore.hasCheckpoint(cursor)) {
                 base = metaStore.readCheckpoint(cursor).snapshot();
                 break;
             }
@@ -823,7 +857,9 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
                 delegate.branchReadRestrictionsSnapshot(),
                 latestCheckpointId,
                 archivedUpToCommitId,
-                delegate.currentNextEntityId()
+                delegate.currentNextEntityId(),
+                delegate.idempotentCommitsSnapshot(),
+                delegate.listRedactionReceipts()
         );
     }
 
@@ -900,6 +936,45 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
         @Override
         public void onBranchReadRestricted(String branchName, Set<String> allowedPrincipalIds) {
             persistRefsSafely();
+        }
+
+        @Override
+        public void onIdempotentCommitRecorded(String compositeKey, CommitId commitId) {
+            persistRefsSafely();
+        }
+
+        @Override
+        public void onHistoryRedacted(
+                RedactionReceipt receipt,
+                List<Commit> rewrittenCommits,
+                int earliestAffectedIndex
+        ) {
+            coldCache.clear();
+            try {
+                if (earliestAffectedIndex >= 0) {
+                    for (CheckpointAndArchiveStore.ArchiveSegment seg : metaStore.listArchiveSegments()) {
+                        if (seg.toCommit() >= earliestAffectedIndex) {
+                            List<Commit> slice = rewrittenCommits.subList((int) seg.fromCommit(), (int) seg.toCommit() + 1);
+                            metaStore.writeArchiveSegment(seg.fromCommit(), seg.toCommit(), slice, durabilityMode);
+                        }
+                    }
+                    for (CommitId ckptId : metaStore.listCheckpointIds()) {
+                        if (ckptId.value() >= earliestAffectedIndex) {
+                            PersistentGraphSnapshot ckptSnap = replayLineageToSnapshot(
+                                    ckptId, rewrittenCommits, delegate::findHotSnapshot, null);
+                            metaStore.writeCheckpoint(ckptId, ckptSnap, durabilityMode, CrashPoint.NONE);
+                        }
+                    }
+                    long archivedCutoff = archivedUpToCommitId.map(CommitId::value).orElse(-1L);
+                    List<Commit> unarchived = rewrittenCommits.stream()
+                            .filter(c -> c.id().value() > archivedCutoff)
+                            .toList();
+                    walStore.rewrite(unarchived, durabilityMode);
+                }
+                persistRefsMeta();
+            } catch (IOException ex) {
+                throw new UncheckedIOException("Failed to persist GDPR redaction across disk storage", ex);
+            }
         }
 
         private void persistRefsSafely() {

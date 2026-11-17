@@ -21,6 +21,7 @@ import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
 
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -257,5 +258,35 @@ public final class InMemoryGraphEngine extends AbstractGraphReader implements Gr
         }
 
         mutations.disconnectEdge(state, edgeId);
+    }
+
+    @Override
+    public void setValidityWindow(EntityId targetEntityOrEdgeId, Instant validFrom, Instant validTo) {
+        Objects.requireNonNull(targetEntityOrEdgeId, "targetEntityOrEdgeId must not be null");
+        GraphSchemaValidator.requireEntityExists(state, targetEntityOrEdgeId, "targetEntityOrEdgeId");
+        if (targetEntityOrEdgeId.isBootstrap()) {
+            throw new SchemaViolationException(
+                    "Cannot attach bitemporal validity window to bootstrap entity: " + targetEntityOrEdgeId);
+        }
+        if (validFrom != null && validTo != null && !validFrom.isBefore(validTo)) {
+            throw new IllegalArgumentException(
+                    "validFrom (" + validFrom + ") must be strictly before validTo (" + validTo + ")");
+        }
+        replaceTemporalBoundEdge(targetEntityOrEdgeId, BootstrapIds.VALID_FROM, validFrom);
+        replaceTemporalBoundEdge(targetEntityOrEdgeId, BootstrapIds.VALID_TO, validTo);
+    }
+
+    private void replaceTemporalBoundEdge(EntityId targetId, EntityId boundPredicateId, Instant timestamp) {
+        for (Edge existing : findOutgoingEdges(targetId, boundPredicateId)) {
+            disconnect(existing.id());
+        }
+        if (timestamp != null) {
+            EntityId tsValueId = createValue(
+                    BootstrapIds.SYSTEM_TIMESTAMP_VALUE_TYPE,
+                    Value.of(timestamp),
+                    ValueMutability.IMMUTABLE
+            );
+            connect(targetId, boundPredicateId, tsValueId);
+        }
     }
 }

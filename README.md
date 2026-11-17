@@ -46,7 +46,7 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 # Paketieren des ausführbaren CLI-JARs
 .\mvnw.cmd -q package -DskipTests
 
-# Stage-1..8-Demonstration (Graph-Schema, Replay, Merge, ACLs, LUBM/BSBM Queries, Engine A/B/C & Disk-Recovery T17)
+# Stage-1..10-Demonstration (Schema, Replay, Merge, ACLs, LUBM/BSBM Queries, Engine A/B/C, Disk-Recovery T17 & MVCC/Bitemporal/GDPR)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo
 
 # Externe Turtle-/N-Triples-Datei importieren, abfragen und re-exportieren
@@ -85,7 +85,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
 - [x] **Stufe 6:** Storage-unabhängige Query-API/DSL (`S-04`), RDF/Turtle-Import & -Export (`T18`, `S-06`, `ADR-0007`) sowie LUBM/BSBM-Datensätze
 - [x] **Stufe 7:** Storage-Experimente & Benchmarks (**Engine A** Map vs. **Engine B1/B2** CSR/Checkpoints vs. **Engine C** Persistent Radix-32 Trie, `W1`–`W7`, `ADR-0008`)
 - [x] **Stufe 8:** Native Disk-Persistenz, WAL/Commit-Log, Checkpoints, Kaltarchiv, Backup/Restore & Crash-Recovery (`P-06`–`P-08`, `T17`, `ADR-0009`)
-- [ ] **Stufe 10:** Reifung zur Mehrbenutzer-Datenbank (MVCC, Auto-Indizes, Bitemporalität)
+- [x] **Stufe 10:** Reifung zur Mehrbenutzer-Datenbank (MVCC, Idempotenz, Auto-Indizes, Bitemporalität, Cherry-Pick & DSGVO-Redaktion, `ADR-0010`)
 - [ ] **Stufe 9 *(Option / P3)*:** Optionaler Enterprise-/Oracle-CDC-/Outbox-Adapter
 
 ---
@@ -104,6 +104,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar storage-experiment `
 - [ADR-0007: Storage-unabhängige Query-API/DSL & RDF/Turtle-Interoperabilität](docs/adr/0007-query-dsl-and-rdf-turtle-interoperability.md)
 - [ADR-0008: Storage-Engine-Vergleich & Wahl von Engine C (Persistent Radix-32 Trie)](docs/adr/0008-storage-engine-comparison-and-persistent-tree-selection.md)
 - [ADR-0009: Persistentes WAL, komprimierte Checkpoints, Kaltarchivierung & Crash-Recovery](docs/adr/0009-persistent-wal-checkpoints-and-crash-recovery.md)
+- [ADR-0010: Multi-User MVCC, automatische Typ-Indizes, Bitemporalität, Cherry-Pick & DSGVO-Redaktion](docs/adr/0010-mvcc-auto-indexing-bitemporality-and-gdpr-redaction.md)
 - [Stage-7 Storage-Experiment-Auswertung](docs/experiments/stage7-storage-comparison/analysis.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 

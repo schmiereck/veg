@@ -105,6 +105,18 @@ abstract class AbstractGraphReader implements GraphReader, PropagationRuleSource
     }
 
     @Override
+    public List<EntityNode> findEntitiesByType(EntityId typeId) {
+        Objects.requireNonNull(typeId, "typeId must not be null");
+        List<EntityNode> indexed = state().entitiesByType.get(typeId);
+        if (indexed == null || indexed.isEmpty()) {
+            return List.of();
+        }
+        return indexed.stream()
+                .sorted(Comparator.comparing(EntityNode::id))
+                .toList();
+    }
+
+    @Override
     public List<EntityNode> allEntities() {
         return state().entities.values().stream()
                 .sorted(Comparator.comparing(EntityNode::id))

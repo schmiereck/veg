@@ -9,6 +9,7 @@ import io.veg.fixtures.Stage3ContractTestSuite;
 import io.veg.fixtures.Stage4ContractTestSuite;
 import io.veg.fixtures.Stage5ContractTestSuite;
 import io.veg.fixtures.Stage6ContractTestSuite;
+import io.veg.fixtures.Stage10ContractTestSuite;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
 import io.veg.model.Reason;
@@ -55,6 +56,10 @@ class CompactEngineContractTest {
         @Override protected VersionedGraphDatabase createDatabase() { return new CompactVersionedDatabase(1); }
     }
 
+    @Nested class B1Stage10 extends Stage10ContractTestSuite {
+        @Override protected VersionedGraphDatabase createDatabase() { return new CompactVersionedDatabase(1); }
+    }
+
     // --- Engine B2: snapshotInterval = 4 (Journal + periodic CSR checkpoints + delta reconstruction) ---
 
     @Nested class B2Stage3 extends Stage3ContractTestSuite {
@@ -70,6 +75,10 @@ class CompactEngineContractTest {
     }
 
     @Nested class B2Stage6 extends Stage6ContractTestSuite {
+        @Override protected VersionedGraphDatabase createDatabase() { return new CompactVersionedDatabase(4); }
+    }
+
+    @Nested class B2Stage10 extends Stage10ContractTestSuite {
         @Override protected VersionedGraphDatabase createDatabase() { return new CompactVersionedDatabase(4); }
     }
 

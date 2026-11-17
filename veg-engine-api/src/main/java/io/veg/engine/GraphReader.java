@@ -2,6 +2,7 @@ package io.veg.engine;
 
 import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
+import io.veg.model.BootstrapIds;
 import io.veg.model.DerivedAssertion;
 import io.veg.model.Edge;
 import io.veg.model.EntityId;
@@ -11,8 +12,11 @@ import io.veg.model.PredicateConstraints;
 import io.veg.model.QueryRow;
 import io.veg.model.RdfExportOptions;
 import io.veg.model.RdfExportResult;
+import io.veg.model.ValidityWindow;
+import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -89,5 +93,40 @@ public interface GraphReader {
 
     default RdfExportResult exportTurtle() {
         return RdfGraphExporter.export(this, RdfExportOptions.turtleDefault());
+    }
+
+    // --- Stage 10: Automatic secondary type index & bitemporal validity views (P-05, V-14) ---
+
+    default List<EntityNode> findEntitiesByType(EntityId typeId) {
+        Objects.requireNonNull(typeId, "typeId must not be null");
+        return allEntities().stream()
+                .filter(n -> n.typeId().equals(typeId))
+                .toList();
+    }
+
+    default Optional<ValidityWindow> resolveValidityWindow(EntityId entityOrEdgeId) {
+        Objects.requireNonNull(entityOrEdgeId, "entityOrEdgeId must not be null");
+        Instant from = resolveTemporalBound(entityOrEdgeId, BootstrapIds.VALID_FROM);
+        Instant to = resolveTemporalBound(entityOrEdgeId, BootstrapIds.VALID_TO);
+        if (from == null && to == null) {
+            return Optional.empty();
+        }
+        return Optional.of(ValidityWindow.of(from, to));
+    }
+
+    private Instant resolveTemporalBound(EntityId targetId, EntityId boundPredicateId) {
+        List<Edge> edges = findOutgoingEdges(targetId, boundPredicateId);
+        if (edges.isEmpty()) {
+            return null;
+        }
+        return findEntity(edges.getFirst().targetId())
+                .flatMap(EntityNode::payload)
+                .filter(v -> v instanceof Value.TimestampValue)
+                .map(v -> ((Value.TimestampValue) v).value())
+                .orElse(null);
+    }
+
+    default GraphReader validAt(Instant validTime) {
+        return new BitemporalGraphReader(this, validTime);
     }
 }

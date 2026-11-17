@@ -49,6 +49,11 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
     private final int[] inOffsets;
     private final int[] inEdgeIndices;
 
+    private final long[] indexedTypeIds;
+    private final int[] typeOffsets;
+    private final int[] typeEntityIndices;
+    private final SnapshotAclCache aclCache = new SnapshotAclCache();
+
     private final String[] typeNames;
     private final long[] typeIds;
     private final String[] predicateNames;
@@ -72,6 +77,9 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
             long[] inOwnerIds,
             int[] inOffsets,
             int[] inEdgeIndices,
+            long[] indexedTypeIds,
+            int[] typeOffsets,
+            int[] typeEntityIndices,
             String[] typeNames,
             long[] typeIds,
             String[] predicateNames,
@@ -94,6 +102,9 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
         this.inOwnerIds = inOwnerIds;
         this.inOffsets = inOffsets;
         this.inEdgeIndices = inEdgeIndices;
+        this.indexedTypeIds = indexedTypeIds;
+        this.typeOffsets = typeOffsets;
+        this.typeEntityIndices = typeEntityIndices;
         this.typeNames = typeNames;
         this.typeIds = typeIds;
         this.predicateNames = predicateNames;
@@ -143,6 +154,7 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
 
         CsrAdjacency outgoingCsr = buildCsr(edgeSources, edgeIds);
         CsrAdjacency incomingCsr = buildCsr(edgeTargets, edgeIds);
+        CsrAdjacency typeIndexCsr = buildCsr(entityTypeIds, entityIds);
 
         NameTable types = buildNameTable(state.typeByName);
         NameTable preds = buildNameTable(state.predicateByName);
@@ -153,6 +165,7 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
                 edgeIds, edgeSources, edgePredicates, edgeTargets,
                 outgoingCsr.owners(), outgoingCsr.offsets(), outgoingCsr.edgeIndices(),
                 incomingCsr.owners(), incomingCsr.offsets(), incomingCsr.edgeIndices(),
+                typeIndexCsr.owners(), typeIndexCsr.offsets(), typeIndexCsr.edgeIndices(),
                 types.names(), types.ids(),
                 preds.names(), preds.ids(),
                 principals.names(), principals.ids(),
@@ -303,6 +316,22 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
     }
 
     @Override
+    public List<EntityNode> findEntitiesByType(EntityId typeId) {
+        Objects.requireNonNull(typeId, "typeId must not be null");
+        int slot = Arrays.binarySearch(indexedTypeIds, typeId.value());
+        if (slot < 0) {
+            return List.of();
+        }
+        int start = typeOffsets[slot];
+        int end = typeOffsets[slot + 1];
+        List<EntityNode> result = new ArrayList<>(end - start);
+        for (int pos = start; pos < end; pos++) {
+            result.add(nodeAt(typeEntityIndices[pos]));
+        }
+        return List.copyOf(result);
+    }
+
+    @Override
     public List<EntityNode> allEntities() {
         List<EntityNode> list = new ArrayList<>(entityIds.length);
         for (int i = 0; i < entityIds.length; i++) {
@@ -322,7 +351,7 @@ public final class CompactGraphSnapshot implements GraphReader, PropagationRuleS
 
     @Override
     public AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId) {
-        return PermissionEvaluator.evaluate(this, principalId, permission, targetId);
+        return aclCache.evaluate(this, principalId, permission, targetId);
     }
 
     @Override

@@ -10,6 +10,7 @@ import io.veg.model.GraphDiff;
 import io.veg.model.MergeResult;
 import io.veg.model.Permission;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
@@ -453,6 +454,81 @@ class Stage8PersistenceAndRecoveryTest {
             assertThat(restoredDb.commitHistory()).hasSize(6);
             assertThat(restoredDb.asOf(new CommitId(2)).allEntities())
                     .isEqualTo(restoredDb.replayAsOf(new CommitId(2)).allEntities());
+        }
+    }
+
+    @Test
+    void stage10_bitemporalIdempotencyAndGdprRedactionSurviveRestartAndPurgeDiskArtifacts() throws IOException {
+        Path dbDir = tempDir.resolve("stage10-disk-restart");
+        Instant jan1 = Instant.parse("2026-01-01T00:00:00Z");
+        Instant jul1 = Instant.parse("2026-07-01T00:00:00Z");
+        Instant mar1 = Instant.parse("2026-03-01T00:00:00Z");
+        String secretPii = "SENSITIVE-PII-DE99-1234-SECRET";
+
+        EntityId piiValueId;
+        EntityId contractEdgeId;
+        CommitId idempotentCommit;
+        CommitId archivedCommit;
+
+        try (PersistentDiskVersionedDatabase db =
+                     PersistentDiskVersionedDatabase.open(dbDir, DurabilityMode.FLUSH_OS_BUFFER, 2)) {
+            EntityId personType;
+            EntityId contractType;
+            EntityId ssnType;
+            EntityId hasSsn;
+            EntityId hasContract;
+
+            try (GraphTransaction tx = db.beginTransaction(Actor.user("hr"), Reason.of("seed PII"))) {
+                personType = tx.defineObjectType("Employee");
+                contractType = tx.defineObjectType("Contract");
+                ssnType = tx.defineValueType("NationalId", ValueType.STRING);
+                hasSsn = tx.definePredicate("hasNationalId", personType, ssnType);
+                hasContract = tx.definePredicate("hasContract", personType, contractType);
+
+                EntityId alice = tx.createObject(personType);
+                piiValueId = tx.createValue(ssnType, Value.of(secretPii));
+                tx.connect(alice, hasSsn, piiValueId);
+                EntityId c = tx.createObject(contractType);
+                contractEdgeId = tx.connectWithValidity(alice, hasContract, c, jan1, jul1);
+                archivedCommit = tx.commit();
+            }
+
+            idempotentCommit = db.executeIdempotent(
+                    "main", "idem-hr-42", Actor.user("hr"), Reason.of("idempotent onboard"), "HR-42", tx -> {
+                        tx.createObject(personType);
+                    });
+            db.createCheckpoint();
+            db.archiveHistoryBefore(archivedCommit);
+
+            RedactionReceipt receipt = db.redactEntityPayload(
+                    piiValueId, Actor.user("dpo"), Reason.of("Art. 17 DSGVO"));
+            assertThat(receipt.affectedCommitCount()).isEqualTo(1);
+        }
+
+        // Verify the physical WAL file on disk no longer contains raw secret PII bytes
+        String rawWalText = new String(Files.readAllBytes(dbDir.resolve("wal.log")),
+                java.nio.charset.StandardCharsets.ISO_8859_1);
+        assertThat(rawWalText).doesNotContain(secretPii);
+
+        try (PersistentDiskVersionedDatabase reopened =
+                     PersistentDiskVersionedDatabase.open(dbDir, DurabilityMode.FLUSH_OS_BUFFER, 2)) {
+            // Idempotency key survived restart
+            CommitId retryResult = reopened.executeIdempotent(
+                    "main", "idem-hr-42", Actor.user("hr"), Reason.of("retry"), "HR-42", tx -> {
+                        throw new AssertionError("Should never re-execute already persisted idempotency key");
+                    });
+            assertThat(retryResult).isEqualTo(idempotentCommit);
+
+            // Redaction receipt & purged historical value survived restart (including archived commit + checkpoint)
+            assertThat(reopened.listRedactionReceipts()).hasSize(1);
+            assertThat(reopened.asOf(archivedCommit).findEntity(piiValueId).orElseThrow().payload())
+                    .contains(Value.of("[REDACTED]"));
+            assertThat(reopened.replayAsOf(archivedCommit).findEntity(piiValueId).orElseThrow().payload())
+                    .contains(Value.of("[REDACTED]"));
+
+            // Bitemporal validity window survived restart
+            assertThat(reopened.currentSnapshot().validAt(mar1).findEdge(contractEdgeId)).isPresent();
+            assertThat(reopened.currentSnapshot().validAt(jul1).findEdge(contractEdgeId)).isEmpty();
         }
     }
 }

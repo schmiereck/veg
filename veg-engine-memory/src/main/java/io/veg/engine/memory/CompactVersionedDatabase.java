@@ -7,9 +7,9 @@ import io.veg.engine.DuplicateBranchOrTagException;
 import io.veg.engine.GraphReader;
 import io.veg.engine.GraphSession;
 import io.veg.engine.GraphTransaction;
+import io.veg.engine.OptimisticCommitConflictException;
 import io.veg.engine.RevertConflictException;
 import io.veg.engine.StagingWorkspace;
-import io.veg.engine.TransactionStateException;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.model.Actor;
 import io.veg.model.Branch;
@@ -22,6 +22,7 @@ import io.veg.model.GraphDiff;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.Tag;
 
 import java.time.Instant;
@@ -35,6 +36,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 /**
@@ -49,7 +51,12 @@ import java.util.function.Consumer;
  */
 public final class CompactVersionedDatabase implements VersionedGraphDatabase, CommitPublicationTarget {
 
+    private record ResolvedCache(CommitId commitId, CompactGraphSnapshot snapshot) {
+    }
+
     private final AtomicLong sharedUserEntityIdAllocator = new AtomicLong(EntityId.USER_MIN_ID);
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+    private final Object[] idempotencyStripes = IdempotentCommitSupport.createStripes();
     private final ValueInterner valueInterner = new ValueInterner();
     private final int snapshotInterval;
 
@@ -58,10 +65,11 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
     private final Map<String, Branch> branches = new LinkedHashMap<>();
     private final Map<String, Tag> tags = new LinkedHashMap<>();
     private final Map<String, Set<String>> branchReadRestrictions = new HashMap<>();
+    private final Map<String, CommitId> idempotentCommits = new HashMap<>();
+    private final List<RedactionReceipt> redactionReceipts = new ArrayList<>();
 
     private String activeBranch = DEFAULT_BRANCH;
-    private CommitId lastResolvedId;
-    private CompactGraphSnapshot lastResolvedSnapshot;
+    private volatile ResolvedCache lastResolved;
 
     public CompactVersionedDatabase() {
         this(1);
@@ -116,23 +124,43 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
 
     @Override
     public String currentBranch() {
-        return activeBranch;
+        rwLock.readLock().lock();
+        try {
+            return activeBranch;
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public void checkoutBranch(String branchName) {
-        requireBranch(branchName);
-        this.activeBranch = branchName;
+        rwLock.writeLock().lock();
+        try {
+            requireBranch(branchName);
+            this.activeBranch = branchName;
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     @Override
     public CommitId headCommitId() {
-        return branchHead(activeBranch);
+        rwLock.readLock().lock();
+        try {
+            return branchHead(activeBranch);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public GraphReader currentSnapshot() {
-        return snapshotFor(headCommitId());
+        rwLock.readLock().lock();
+        try {
+            return snapshotFor(headCommitId());
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -142,33 +170,61 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         if (branchName.isBlank()) {
             throw new IllegalArgumentException("branchName must not be blank");
         }
-        if (branches.containsKey(branchName)) {
-            throw new DuplicateBranchOrTagException("Branch already exists: " + branchName);
+        rwLock.writeLock().lock();
+        try {
+            if (branches.containsKey(branchName)) {
+                throw new DuplicateBranchOrTagException("Branch already exists: " + branchName);
+            }
+            getCommit(fromCommitId);
+            Branch branch = new Branch(branchName, fromCommitId);
+            branches.put(branchName, branch);
+            return branch;
+        } finally {
+            rwLock.writeLock().unlock();
         }
-        getCommit(fromCommitId);
-        Branch branch = new Branch(branchName, fromCommitId);
-        branches.put(branchName, branch);
-        return branch;
     }
 
     @Override
     public Optional<Branch> findBranch(String branchName) {
-        return branchName == null ? Optional.empty() : Optional.ofNullable(branches.get(branchName));
+        if (branchName == null) {
+            return Optional.empty();
+        }
+        rwLock.readLock().lock();
+        try {
+            return Optional.ofNullable(branches.get(branchName));
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public List<Branch> listBranches() {
-        return List.copyOf(branches.values());
+        rwLock.readLock().lock();
+        try {
+            return List.copyOf(branches.values());
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public CommitId branchHead(String branchName) {
-        return requireBranch(branchName).headCommitId();
+        rwLock.readLock().lock();
+        try {
+            return requireBranch(branchName).headCommitId();
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public GraphReader branchSnapshot(String branchName) {
-        return snapshotFor(branchHead(branchName));
+        rwLock.readLock().lock();
+        try {
+            return snapshotFor(branchHead(branchName));
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -178,67 +234,110 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         if (tagName.isBlank()) {
             throw new IllegalArgumentException("tagName must not be blank");
         }
-        if (tags.containsKey(tagName)) {
-            throw new DuplicateBranchOrTagException("Tag already exists: " + tagName);
+        rwLock.writeLock().lock();
+        try {
+            if (tags.containsKey(tagName)) {
+                throw new DuplicateBranchOrTagException("Tag already exists: " + tagName);
+            }
+            getCommit(commitId);
+            Tag tag = new Tag(tagName, commitId);
+            tags.put(tagName, tag);
+            return tag;
+        } finally {
+            rwLock.writeLock().unlock();
         }
-        getCommit(commitId);
-        Tag tag = new Tag(tagName, commitId);
-        tags.put(tagName, tag);
-        return tag;
     }
 
     @Override
     public Optional<Tag> findTag(String tagName) {
-        return tagName == null ? Optional.empty() : Optional.ofNullable(tags.get(tagName));
+        if (tagName == null) {
+            return Optional.empty();
+        }
+        rwLock.readLock().lock();
+        try {
+            return Optional.ofNullable(tags.get(tagName));
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public List<Tag> listTags() {
-        return List.copyOf(tags.values());
+        rwLock.readLock().lock();
+        try {
+            return List.copyOf(tags.values());
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public GraphReader asOfTag(String tagName) {
         Objects.requireNonNull(tagName, "tagName must not be null");
-        Tag tag = tags.get(tagName);
-        if (tag == null) {
-            throw new CommitNotFoundException("Tag not found: " + tagName);
+        rwLock.readLock().lock();
+        try {
+            Tag tag = tags.get(tagName);
+            if (tag == null) {
+                throw new CommitNotFoundException("Tag not found: " + tagName);
+            }
+            return asOf(tag.commitId());
+        } finally {
+            rwLock.readLock().unlock();
         }
-        return asOf(tag.commitId());
     }
 
     @Override
     public GraphReader asOf(CommitId commitId) {
         Objects.requireNonNull(commitId, "commitId must not be null");
-        getCommit(commitId);
-        return snapshotFor(commitId);
+        rwLock.readLock().lock();
+        try {
+            getCommit(commitId);
+            return snapshotFor(commitId);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public Commit getCommit(CommitId commitId) {
         Objects.requireNonNull(commitId, "commitId must not be null");
-        long idx = commitId.value();
-        if (idx < 0 || idx >= commits.size()) {
-            throw new CommitNotFoundException("Commit not found: " + commitId);
+        rwLock.readLock().lock();
+        try {
+            long idx = commitId.value();
+            if (idx < 0 || idx >= commits.size()) {
+                throw new CommitNotFoundException("Commit not found: " + commitId);
+            }
+            return commits.get((int) idx);
+        } finally {
+            rwLock.readLock().unlock();
         }
-        return commits.get((int) idx);
     }
 
     @Override
     public List<Commit> commitHistory() {
-        return List.copyOf(commits);
+        rwLock.readLock().lock();
+        try {
+            return List.copyOf(commits);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public List<Commit> historyOf(EntityId entityId) {
         Objects.requireNonNull(entityId, "entityId must not be null");
-        List<Commit> result = new ArrayList<>();
-        for (Commit commit : commits) {
-            if (commit.touchesEntity(entityId)) {
-                result.add(commit);
+        rwLock.readLock().lock();
+        try {
+            List<Commit> result = new ArrayList<>();
+            for (Commit commit : commits) {
+                if (commit.touchesEntity(entityId)) {
+                    result.add(commit);
+                }
             }
+            return List.copyOf(result);
+        } finally {
+            rwLock.readLock().unlock();
         }
-        return List.copyOf(result);
     }
 
     @Override
@@ -259,15 +358,25 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         Objects.requireNonNull(actor, "actor must not be null");
         Objects.requireNonNull(reason, "reason must not be null");
         Objects.requireNonNull(dataCategory, "dataCategory must not be null");
-        CommitId head = branchHead(branchName);
-        return new InMemoryTransaction(
-                this, branchName, head, mutableStateForCommit(head), dataCategory, actor, reason, correlationId);
+        rwLock.readLock().lock();
+        try {
+            CommitId head = branchHead(branchName);
+            return new InMemoryTransaction(
+                    this, branchName, head, mutableStateForCommit(head), dataCategory, actor, reason, correlationId);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public StagingWorkspace createStagingWorkspace(String branchName) {
-        CommitId head = branchHead(branchName);
-        return new InMemoryStagingWorkspace(this, branchName, head, mutableStateForCommit(head));
+        rwLock.readLock().lock();
+        try {
+            CommitId head = branchHead(branchName);
+            return new InMemoryStagingWorkspace(this, branchName, head, mutableStateForCommit(head));
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -276,31 +385,41 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         Objects.requireNonNull(actor, "actor must not be null");
         Objects.requireNonNull(reason, "reason must not be null");
 
-        CommitId branchHeadId = branchHead(branchName);
-        if (targetCommitId.isBootstrap()) {
-            throw new RevertConflictException("Cannot revert bootstrap commit " + targetCommitId);
-        }
-        Commit target = getCommit(targetCommitId);
-        MutableGraphState working = mutableStateForCommit(branchHeadId);
-        List<Change> counterChanges = CommitReverter.revertOnto(working, target);
+        rwLock.writeLock().lock();
+        try {
+            CommitId branchHeadId = branchHead(branchName);
+            if (targetCommitId.isBootstrap()) {
+                throw new RevertConflictException("Cannot revert bootstrap commit " + targetCommitId);
+            }
+            Commit target = getCommit(targetCommitId);
+            MutableGraphState working = mutableStateForCommit(branchHeadId);
+            List<Change> counterChanges = CommitReverter.revertOnto(working, target);
 
-        return appendCommit(
-                branchName,
-                List.of(branchHeadId),
-                DataCategory.REFERENCE,
-                actor,
-                reason,
-                Optional.ofNullable(correlationId),
-                working,
-                counterChanges
-        );
+            return appendCommit(
+                    branchName,
+                    List.of(branchHeadId),
+                    DataCategory.REFERENCE,
+                    actor,
+                    reason,
+                    Optional.ofNullable(correlationId),
+                    working,
+                    counterChanges
+            );
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     @Override
     public CommitId findCommonAncestor(CommitId commitA, CommitId commitB) {
-        getCommit(commitA);
-        getCommit(commitB);
-        return ThreeWayMergeEngine.findCommonAncestor(commits, commitA, commitB);
+        rwLock.readLock().lock();
+        try {
+            getCommit(commitA);
+            getCommit(commitB);
+            return ThreeWayMergeEngine.findCommonAncestor(commits, commitA, commitB);
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -309,31 +428,36 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         Objects.requireNonNull(reason, "reason must not be null");
         Objects.requireNonNull(policy, "policy must not be null");
 
-        CommitId sourceHead = branchHead(sourceBranch);
-        CommitId targetHead = branchHead(targetBranch);
+        rwLock.writeLock().lock();
+        try {
+            CommitId sourceHead = branchHead(sourceBranch);
+            CommitId targetHead = branchHead(targetBranch);
 
-        ThreeWayMergeEngine.PreparedMerge prepared = ThreeWayMergeEngine.prepareMerge(
-                commits, this::mutableStateForCommit, sourceHead, targetHead, policy);
-        if (!prepared.succeeded()) {
+            ThreeWayMergeEngine.PreparedMerge prepared = ThreeWayMergeEngine.prepareMerge(
+                    commits, this::mutableStateForCommit, sourceHead, targetHead, policy);
+            if (!prepared.succeeded()) {
+                return new MergeResult(
+                        false, Optional.empty(), prepared.baseCommitId(), sourceHead, targetHead, prepared.conflicts());
+            }
+
+            List<CommitId> parents = sourceHead.equals(targetHead)
+                    ? List.of(targetHead)
+                    : List.of(targetHead, sourceHead);
+            CommitId mergeCommitId = appendCommit(
+                    targetBranch,
+                    parents,
+                    DataCategory.REFERENCE,
+                    actor,
+                    reason,
+                    Optional.empty(),
+                    prepared.mergedState(),
+                    prepared.changesFromTarget()
+            );
             return new MergeResult(
-                    false, Optional.empty(), prepared.baseCommitId(), sourceHead, targetHead, prepared.conflicts());
+                    true, Optional.of(mergeCommitId), prepared.baseCommitId(), sourceHead, targetHead, List.of());
+        } finally {
+            rwLock.writeLock().unlock();
         }
-
-        List<CommitId> parents = sourceHead.equals(targetHead)
-                ? List.of(targetHead)
-                : List.of(targetHead, sourceHead);
-        CommitId mergeCommitId = appendCommit(
-                targetBranch,
-                parents,
-                DataCategory.REFERENCE,
-                actor,
-                reason,
-                Optional.empty(),
-                prepared.mergedState(),
-                prepared.changesFromTarget()
-        );
-        return new MergeResult(
-                true, Optional.of(mergeCommitId), prepared.baseCommitId(), sourceHead, targetHead, List.of());
     }
 
     @Override
@@ -348,37 +472,46 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         Objects.requireNonNull(reason, "reason must not be null");
         Objects.requireNonNull(conflictResolver, "conflictResolver must not be null");
 
-        CommitId sourceHead = branchHead(sourceBranch);
-        CommitId targetHead = branchHead(targetBranch);
+        rwLock.writeLock().lock();
+        try {
+            CommitId sourceHead = branchHead(sourceBranch);
+            CommitId targetHead = branchHead(targetBranch);
 
-        MutableGraphState resolvedState = mutableStateForCommit(targetHead);
-        List<Change> resolutionChanges = new ArrayList<>();
-        InMemoryGraphEngine session = new InMemoryGraphEngine(resolvedState, resolutionChanges);
-        conflictResolver.accept(session);
+            MutableGraphState resolvedState = mutableStateForCommit(targetHead);
+            List<Change> resolutionChanges = new ArrayList<>();
+            InMemoryGraphEngine session = new InMemoryGraphEngine(resolvedState, resolutionChanges);
+            conflictResolver.accept(session);
 
-        return appendCommit(
-                targetBranch,
-                List.of(targetHead, sourceHead),
-                DataCategory.REFERENCE,
-                actor,
-                reason,
-                Optional.empty(),
-                resolvedState,
-                resolutionChanges
-        );
+            return appendCommit(
+                    targetBranch,
+                    List.of(targetHead, sourceHead),
+                    DataCategory.REFERENCE,
+                    actor,
+                    reason,
+                    Optional.empty(),
+                    resolvedState,
+                    resolutionChanges
+            );
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     @Override
     public GraphReader replayAsOf(CommitId commitId) {
         Objects.requireNonNull(commitId, "commitId must not be null");
-        getCommit(commitId);
-
         List<Commit> firstParentLineage = new ArrayList<>();
-        CommitId cursor = commitId;
-        while (cursor != null) {
-            Commit commit = commits.get((int) cursor.value());
-            firstParentLineage.add(commit);
-            cursor = commit.parentId().orElse(null);
+        rwLock.readLock().lock();
+        try {
+            getCommit(commitId);
+            CommitId cursor = commitId;
+            while (cursor != null) {
+                Commit commit = commits.get((int) cursor.value());
+                firstParentLineage.add(commit);
+                cursor = commit.parentId().orElse(null);
+            }
+        } finally {
+            rwLock.readLock().unlock();
         }
         Collections.reverse(firstParentLineage);
 
@@ -394,55 +527,173 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
 
     @Override
     public void restrictBranchReadAccess(String branchName, Set<String> allowedPrincipalIds) {
-        requireBranch(branchName);
         Objects.requireNonNull(allowedPrincipalIds, "allowedPrincipalIds must not be null");
         for (String id : allowedPrincipalIds) {
             if (id == null || id.isBlank()) {
                 throw new IllegalArgumentException("allowedPrincipalIds must not contain null or blank principal IDs");
             }
         }
-        branchReadRestrictions.put(branchName, Set.copyOf(allowedPrincipalIds));
+        rwLock.writeLock().lock();
+        try {
+            requireBranch(branchName);
+            branchReadRestrictions.put(branchName, Set.copyOf(allowedPrincipalIds));
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     @Override
     public AuthorizedGraphReader authorizedCurrentSnapshot(String principalId) {
-        return authorizedBranchSnapshot(activeBranch, principalId);
+        return authorizedBranchSnapshot(currentBranch(), principalId);
     }
 
     @Override
     public AuthorizedGraphReader authorizedBranchSnapshot(String branchName, String principalId) {
-        Branch branch = requireBranch(branchName);
-        GraphReader snapshot = snapshotFor(branch.headCommitId());
-        return new AuthorizedGraphReaderImpl(
-                snapshot,
-                snapshot,
-                principalId,
-                branchName,
-                branchReadRestrictions.get(branchName)
-        );
+        rwLock.readLock().lock();
+        try {
+            Branch branch = requireBranch(branchName);
+            GraphReader snapshot = snapshotFor(branch.headCommitId());
+            return new AuthorizedGraphReaderImpl(
+                    snapshot,
+                    snapshot,
+                    principalId,
+                    branchName,
+                    branchReadRestrictions.get(branchName)
+            );
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
     public AuthorizedGraphReader authorizedAsOf(CommitId commitId, String principalId) {
-        Commit commit = getCommit(commitId);
-        GraphReader historicalSnapshot = snapshotFor(commitId);
-        String targetBranch = commit.branchName();
-        Branch branchObj = branches.get(targetBranch);
-        GraphReader headSnapshot = branchObj != null
-                ? snapshotFor(branchObj.headCommitId())
-                : snapshotFor(headCommitId());
-        return new AuthorizedGraphReaderImpl(
-                historicalSnapshot,
-                headSnapshot,
-                principalId,
-                targetBranch,
-                branchReadRestrictions.get(targetBranch)
+        rwLock.readLock().lock();
+        try {
+            Commit commit = getCommit(commitId);
+            GraphReader historicalSnapshot = snapshotFor(commitId);
+            String targetBranch = commit.branchName();
+            Branch branchObj = branches.get(targetBranch);
+            GraphReader headSnapshot = branchObj != null
+                    ? snapshotFor(branchObj.headCommitId())
+                    : snapshotFor(headCommitId());
+            return new AuthorizedGraphReaderImpl(
+                    historicalSnapshot,
+                    headSnapshot,
+                    principalId,
+                    targetBranch,
+                    branchReadRestrictions.get(targetBranch)
+            );
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    @Override
+    public CommitId executeIdempotent(
+            String branchName,
+            String idempotencyKey,
+            Actor actor,
+            Reason reason,
+            String correlationId,
+            Consumer<GraphTransaction> work
+    ) {
+        return IdempotentCommitSupport.execute(
+                this,
+                idempotencyStripes,
+                this::lookupIdempotentCommit,
+                this::registerIdempotentCommit,
+                branchName,
+                idempotencyKey,
+                actor,
+                reason,
+                correlationId,
+                work
         );
     }
 
     @Override
+    public MergeResult cherryPick(CommitId sourceCommitId, String targetBranch, Actor actor, Reason reason) {
+        Objects.requireNonNull(sourceCommitId, "sourceCommitId must not be null");
+        Objects.requireNonNull(targetBranch, "targetBranch must not be null");
+        Objects.requireNonNull(actor, "actor must not be null");
+        Objects.requireNonNull(reason, "reason must not be null");
+        if (sourceCommitId.isBootstrap()) {
+            throw new IllegalArgumentException("Cannot cherry-pick bootstrap commit " + sourceCommitId);
+        }
+
+        rwLock.writeLock().lock();
+        try {
+            getCommit(sourceCommitId);
+            CommitId targetHead = branchHead(targetBranch);
+            ThreeWayMergeEngine.PreparedMerge prepared = ThreeWayMergeEngine.prepareCherryPick(
+                    commits, this::mutableStateForCommit, sourceCommitId, targetHead);
+            if (!prepared.succeeded()) {
+                return new MergeResult(
+                        false, Optional.empty(), prepared.baseCommitId(), sourceCommitId, targetHead, prepared.conflicts());
+            }
+
+            CommitId cherryId = appendCommit(
+                    targetBranch,
+                    List.of(targetHead),
+                    commits.get((int) sourceCommitId.value()).dataCategory(),
+                    actor,
+                    reason,
+                    Optional.empty(),
+                    prepared.mergedState(),
+                    prepared.changesFromTarget()
+            );
+            return new MergeResult(
+                    true, Optional.of(cherryId), prepared.baseCommitId(), sourceCommitId, targetHead, List.of());
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public RedactionReceipt redactEntityPayload(EntityId valueEntityId, Actor actor, Reason reason) {
+        rwLock.writeLock().lock();
+        try {
+            RedactionEngine.RedactionOutcome outcome =
+                    RedactionEngine.redactAcrossHistory(commits, valueEntityId, actor, reason);
+            commits.clear();
+            commits.addAll(outcome.rewrittenCommits());
+            valueInterner.clear();
+            lastResolved = null;
+            if (outcome.earliestAffectedIndex() >= 0) {
+                for (int i = outcome.earliestAffectedIndex(); i < commits.size(); i++) {
+                    Commit c = commits.get(i);
+                    if (checkpoints.containsKey(c.id())) {
+                        checkpoints.remove(c.id());
+                        MutableGraphState rebuilt = reconstructStateFromNearestCheckpoint(c.id());
+                        checkpoints.put(c.id(), CompactGraphSnapshot.fromState(rebuilt, valueInterner));
+                    }
+                }
+            }
+            redactionReceipts.add(outcome.receipt());
+            return outcome.receipt();
+        } finally {
+            rwLock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public List<RedactionReceipt> listRedactionReceipts() {
+        rwLock.readLock().lock();
+        try {
+            return List.copyOf(redactionReceipts);
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    @Override
     public MutableGraphState stateCopyForBranch(String branchName) {
-        return mutableStateForCommit(branchHead(branchName));
+        rwLock.readLock().lock();
+        try {
+            return mutableStateForCommit(branchHead(branchName));
+        } finally {
+            rwLock.readLock().unlock();
+        }
     }
 
     @Override
@@ -456,14 +707,35 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
             MutableGraphState committedState,
             List<Change> changes
     ) {
-        CommitId currentBranchHead = branchHead(branchName);
-        if (!expectedBaseCommitId.equals(currentBranchHead)) {
-            throw new TransactionStateException(
-                    "Concurrent commit conflict on branch '" + branchName + "': transaction based on "
-                            + expectedBaseCommitId + " but head is now " + currentBranchHead);
+        rwLock.writeLock().lock();
+        try {
+            CommitId currentBranchHead = branchHead(branchName);
+            if (!expectedBaseCommitId.equals(currentBranchHead)) {
+                throw new OptimisticCommitConflictException(branchName, expectedBaseCommitId, currentBranchHead);
+            }
+            return appendCommit(
+                    branchName, List.of(currentBranchHead), dataCategory, actor, reason, correlationId, committedState, changes);
+        } finally {
+            rwLock.writeLock().unlock();
         }
-        return appendCommit(
-                branchName, List.of(currentBranchHead), dataCategory, actor, reason, correlationId, committedState, changes);
+    }
+
+    private Optional<CommitId> lookupIdempotentCommit(String key) {
+        rwLock.readLock().lock();
+        try {
+            return Optional.ofNullable(idempotentCommits.get(key));
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    private void registerIdempotentCommit(String key, CommitId commitId) {
+        rwLock.writeLock().lock();
+        try {
+            idempotentCommits.put(key, commitId);
+        } finally {
+            rwLock.writeLock().unlock();
+        }
     }
 
     private Branch requireBranch(String branchName) {
@@ -502,8 +774,7 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         if (nextId.value() % snapshotInterval == 0) {
             checkpoints.put(nextId, compact);
         }
-        lastResolvedId = nextId;
-        lastResolvedSnapshot = compact;
+        lastResolved = new ResolvedCache(nextId, compact);
         branches.put(branchName, new Branch(branchName, nextId));
         return nextId;
     }
@@ -513,13 +784,13 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         if (direct != null) {
             return direct;
         }
-        if (commitId.equals(lastResolvedId) && lastResolvedSnapshot != null) {
-            return lastResolvedSnapshot;
+        ResolvedCache cached = lastResolved;
+        if (cached != null && commitId.equals(cached.commitId())) {
+            return cached.snapshot();
         }
         MutableGraphState reconstructed = reconstructStateFromNearestCheckpoint(commitId);
         CompactGraphSnapshot built = CompactGraphSnapshot.fromState(reconstructed, valueInterner);
-        lastResolvedId = commitId;
-        lastResolvedSnapshot = built;
+        lastResolved = new ResolvedCache(commitId, built);
         return built;
     }
 
@@ -528,8 +799,9 @@ public final class CompactVersionedDatabase implements VersionedGraphDatabase, C
         if (direct != null) {
             return direct.toMutableState(sharedUserEntityIdAllocator);
         }
-        if (commitId.equals(lastResolvedId) && lastResolvedSnapshot != null) {
-            return lastResolvedSnapshot.toMutableState(sharedUserEntityIdAllocator);
+        ResolvedCache cached = lastResolved;
+        if (cached != null && commitId.equals(cached.commitId())) {
+            return cached.snapshot().toMutableState(sharedUserEntityIdAllocator);
         }
         return reconstructStateFromNearestCheckpoint(commitId);
     }

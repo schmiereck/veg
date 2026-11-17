@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Function;
 
 /**
  * Engine C immutable graph snapshot backed by structurally shared {@link PersistentLongMap} radix tries.
@@ -40,6 +41,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
             PersistentLongMap.empty(),
             PersistentLongMap.empty(),
             PersistentLongMap.empty(),
+            PersistentLongMap.empty(),
             Map.of(),
             Map.of(),
             Map.of(),
@@ -50,16 +52,19 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
     private final PersistentLongMap<Edge> edges;
     private final PersistentLongMap<List<Edge>> outgoingEdges;
     private final PersistentLongMap<List<Edge>> incomingEdges;
+    private final PersistentLongMap<List<EntityNode>> entitiesByType;
     private final Map<String, EntityId> typeByName;
     private final Map<String, EntityId> predicateByName;
     private final Map<String, EntityId> principalByName;
     private final List<EntityId> propagationRuleIds;
+    private final SnapshotAclCache aclCache = new SnapshotAclCache();
 
     private PersistentGraphSnapshot(
             PersistentLongMap<EntityNode> entities,
             PersistentLongMap<Edge> edges,
             PersistentLongMap<List<Edge>> outgoingEdges,
             PersistentLongMap<List<Edge>> incomingEdges,
+            PersistentLongMap<List<EntityNode>> entitiesByType,
             Map<String, EntityId> typeByName,
             Map<String, EntityId> predicateByName,
             Map<String, EntityId> principalByName,
@@ -69,6 +74,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
         this.edges = edges;
         this.outgoingEdges = outgoingEdges;
         this.incomingEdges = incomingEdges;
+        this.entitiesByType = entitiesByType;
         this.typeByName = typeByName;
         this.predicateByName = predicateByName;
         this.principalByName = principalByName;
@@ -114,8 +120,18 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
             nextEntities = nextEntities.put(edge.id().value(),
                     new EntityNode(edge.id(), BootstrapIds.META_EDGE_TYPE, EntityKind.EDGE, Optional.empty()));
             nextEdges = nextEdges.put(edge.id().value(), edge);
-            nextOutgoing = addEdgeToAdjacency(nextOutgoing, edge.sourceId().value(), edge);
-            nextIncoming = addEdgeToAdjacency(nextIncoming, edge.targetId().value(), edge);
+            nextOutgoing = addToBucket(nextOutgoing, edge.sourceId().value(), edge, Edge::id);
+            nextIncoming = addToBucket(nextIncoming, edge.targetId().value(), edge, Edge::id);
+        }
+
+        Map<Long, List<EntityNode>> groupedByType = new HashMap<>();
+        nextEntities.forEach(node ->
+                groupedByType.computeIfAbsent(node.typeId().value(), ignored -> new ArrayList<>()).add(node));
+        PersistentLongMap<List<EntityNode>> nextEntitiesByType = PersistentLongMap.empty();
+        for (var entry : groupedByType.entrySet()) {
+            List<EntityNode> list = entry.getValue();
+            list.sort(Comparator.comparing(EntityNode::id));
+            nextEntitiesByType = nextEntitiesByType.put(entry.getKey(), List.copyOf(list));
         }
 
         Map<String, EntityId> types = new HashMap<>();
@@ -130,6 +146,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                 nextEdges,
                 nextOutgoing,
                 nextIncoming,
+                nextEntitiesByType,
                 Map.copyOf(types),
                 Map.copyOf(predicates),
                 Map.copyOf(principals),
@@ -153,6 +170,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
         PersistentLongMap<Edge> nextEdges = this.edges;
         PersistentLongMap<List<Edge>> nextOutgoing = this.outgoingEdges;
         PersistentLongMap<List<Edge>> nextIncoming = this.incomingEdges;
+        PersistentLongMap<List<EntityNode>> nextEntitiesByType = this.entitiesByType;
 
         Map<String, EntityId> nextTypes = null;
         Map<String, EntityId> nextPredicates = null;
@@ -168,7 +186,12 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                             ? new EntityNode(rawNode.id(), rawNode.typeId(), EntityKind.VALUE,
                                     Optional.of(interner.intern(rawNode.payload().get())))
                             : rawNode;
+                    EntityNode old = nextEntities.get(node.id().value());
+                    if (old != null && !old.typeId().equals(node.typeId())) {
+                        nextEntitiesByType = removeFromBucket(nextEntitiesByType, old.typeId().value(), old.id(), EntityNode::id);
+                    }
                     nextEntities = nextEntities.put(node.id().value(), node);
+                    nextEntitiesByType = addToBucket(nextEntitiesByType, node.typeId().value(), node, EntityNode::id);
                     if (BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(node.typeId())) {
                         if (nextPropRules == null) {
                             nextPropRules = new ArrayList<>(this.propagationRuleIds);
@@ -185,7 +208,12 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                     }
                 }
                 case Change.EntityRemoved(EntityNode removedNode) -> {
+                    EntityNode existing = nextEntities.get(removedNode.id().value());
                     nextEntities = nextEntities.remove(removedNode.id().value());
+                    if (existing != null) {
+                        nextEntitiesByType = removeFromBucket(
+                                nextEntitiesByType, existing.typeId().value(), existing.id(), EntityNode::id);
+                    }
                     if (BootstrapIds.META_PROPAGATION_RULE_TYPE.equals(removedNode.typeId())) {
                         if (nextPropRules == null) {
                             nextPropRules = new ArrayList<>(this.propagationRuleIds);
@@ -204,8 +232,9 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                         throw new IllegalStateException("Missing entity during persistent delta update: " + entityId);
                     }
                     Value interned = interner.intern(newValue);
-                    nextEntities = nextEntities.put(entityId.value(),
-                            new EntityNode(entityId, existing.typeId(), EntityKind.VALUE, Optional.of(interned)));
+                    EntityNode updated = new EntityNode(entityId, existing.typeId(), EntityKind.VALUE, Optional.of(interned));
+                    nextEntities = nextEntities.put(entityId.value(), updated);
+                    nextEntitiesByType = addToBucket(nextEntitiesByType, updated.typeId().value(), updated, EntityNode::id);
 
                     List<Edge> incoming = nextIncoming.get(entityId.value());
                     if (incoming != null) {
@@ -217,11 +246,12 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                     }
                 }
                 case Change.EdgeConnected(Edge edge) -> {
-                    nextEntities = nextEntities.put(edge.id().value(),
-                            new EntityNode(edge.id(), BootstrapIds.META_EDGE_TYPE, EntityKind.EDGE, Optional.empty()));
+                    EntityNode edgeNode = new EntityNode(edge.id(), BootstrapIds.META_EDGE_TYPE, EntityKind.EDGE, Optional.empty());
+                    nextEntities = nextEntities.put(edge.id().value(), edgeNode);
+                    nextEntitiesByType = addToBucket(nextEntitiesByType, BootstrapIds.META_EDGE_TYPE.value(), edgeNode, EntityNode::id);
                     nextEdges = nextEdges.put(edge.id().value(), edge);
-                    nextOutgoing = addEdgeToAdjacency(nextOutgoing, edge.sourceId().value(), edge);
-                    nextIncoming = addEdgeToAdjacency(nextIncoming, edge.targetId().value(), edge);
+                    nextOutgoing = addToBucket(nextOutgoing, edge.sourceId().value(), edge, Edge::id);
+                    nextIncoming = addToBucket(nextIncoming, edge.targetId().value(), edge, Edge::id);
                     if (BootstrapIds.HAS_NAME.equals(edge.predicateId())) {
                         touchedNameSubjects.add(edge.sourceId());
                     }
@@ -229,8 +259,10 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                 case Change.EdgeDisconnected(Edge edge) -> {
                     nextEdges = nextEdges.remove(edge.id().value());
                     nextEntities = nextEntities.remove(edge.id().value());
-                    nextOutgoing = removeEdgeFromAdjacency(nextOutgoing, edge.sourceId().value(), edge.id());
-                    nextIncoming = removeEdgeFromAdjacency(nextIncoming, edge.targetId().value(), edge.id());
+                    nextEntitiesByType = removeFromBucket(
+                            nextEntitiesByType, BootstrapIds.META_EDGE_TYPE.value(), edge.id(), EntityNode::id);
+                    nextOutgoing = removeFromBucket(nextOutgoing, edge.sourceId().value(), edge.id(), Edge::id);
+                    nextIncoming = removeFromBucket(nextIncoming, edge.targetId().value(), edge.id(), Edge::id);
                     if (BootstrapIds.HAS_NAME.equals(edge.predicateId())) {
                         touchedNameSubjects.add(edge.sourceId());
                     }
@@ -262,6 +294,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
                 nextEdges,
                 nextOutgoing,
                 nextIncoming,
+                nextEntitiesByType,
                 nextTypes != null ? Map.copyOf(nextTypes) : this.typeByName,
                 nextPredicates != null ? Map.copyOf(nextPredicates) : this.predicateByName,
                 nextPrincipals != null ? Map.copyOf(nextPrincipals) : this.principalByName,
@@ -282,6 +315,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
         edges.collectUniqueTrieNodes(seenNodes);
         outgoingEdges.collectUniqueTrieNodes(seenNodes);
         incomingEdges.collectUniqueTrieNodes(seenNodes);
+        entitiesByType.collectUniqueTrieNodes(seenNodes);
     }
 
     @Override
@@ -393,6 +427,13 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
     }
 
     @Override
+    public List<EntityNode> findEntitiesByType(EntityId typeId) {
+        Objects.requireNonNull(typeId, "typeId must not be null");
+        List<EntityNode> list = entitiesByType.get(typeId.value());
+        return list == null ? List.of() : list;
+    }
+
+    @Override
     public List<EntityNode> allEntities() {
         return entities.valuesSorted(Comparator.comparing(EntityNode::id));
     }
@@ -404,7 +445,7 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
 
     @Override
     public AccessDecision evaluateAccess(String principalId, Permission permission, EntityId targetId) {
-        return PermissionEvaluator.evaluate(this, principalId, permission, targetId);
+        return aclCache.evaluate(this, principalId, permission, targetId);
     }
 
     @Override
@@ -438,51 +479,55 @@ public final class PersistentGraphSnapshot implements GraphReader, PropagationRu
         return SemanticInferenceEngine.findAllOutgoingAssertions(this, sourceId, predicateId);
     }
 
-    private static PersistentLongMap<List<Edge>> addEdgeToAdjacency(
-            PersistentLongMap<List<Edge>> map,
+    private static <T> PersistentLongMap<List<T>> addToBucket(
+            PersistentLongMap<List<T>> map,
             long ownerKey,
-            Edge edge
+            T item,
+            Function<T, EntityId> idExtractor
     ) {
-        List<Edge> existing = map.get(ownerKey);
+        List<T> existing = map.get(ownerKey);
         if (existing == null || existing.isEmpty()) {
-            return map.put(ownerKey, List.of(edge));
+            return map.put(ownerKey, List.of(item));
         }
-        List<Edge> updated = new ArrayList<>(existing.size() + 1);
+        EntityId itemId = idExtractor.apply(item);
+        List<T> updated = new ArrayList<>(existing.size() + 1);
         boolean inserted = false;
-        for (Edge current : existing) {
-            if (!inserted && edge.id().compareTo(current.id()) < 0) {
-                updated.add(edge);
+        for (T current : existing) {
+            EntityId curId = idExtractor.apply(current);
+            if (!inserted && itemId.compareTo(curId) < 0) {
+                updated.add(item);
                 inserted = true;
             }
-            if (current.id().equals(edge.id())) {
-                updated.add(edge);
+            if (curId.equals(itemId)) {
+                updated.add(item);
                 inserted = true;
             } else {
                 updated.add(current);
             }
         }
         if (!inserted) {
-            updated.add(edge);
+            updated.add(item);
         }
         return map.put(ownerKey, List.copyOf(updated));
     }
 
-    private static PersistentLongMap<List<Edge>> removeEdgeFromAdjacency(
-            PersistentLongMap<List<Edge>> map,
+    private static <T> PersistentLongMap<List<T>> removeFromBucket(
+            PersistentLongMap<List<T>> map,
             long ownerKey,
-            EntityId edgeId
+            EntityId itemId,
+            Function<T, EntityId> idExtractor
     ) {
-        List<Edge> existing = map.get(ownerKey);
+        List<T> existing = map.get(ownerKey);
         if (existing == null || existing.isEmpty()) {
             return map;
         }
-        List<Edge> updated = new ArrayList<>(existing.size());
+        List<T> updated = new ArrayList<>(existing.size());
         boolean changed = false;
-        for (Edge e : existing) {
-            if (e.id().equals(edgeId)) {
+        for (T current : existing) {
+            if (idExtractor.apply(current).equals(itemId)) {
                 changed = true;
             } else {
-                updated.add(e);
+                updated.add(current);
             }
         }
         if (!changed) {

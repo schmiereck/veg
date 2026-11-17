@@ -19,6 +19,7 @@ public final class BootstrapIds {
     public static final EntityId SYSTEM_IDENTIFIER_VALUE_TYPE = new EntityId(6L);
     public static final EntityId SYSTEM_INT_VALUE_TYPE = new EntityId(7L);
     public static final EntityId SYSTEM_BOOLEAN_VALUE_TYPE = new EntityId(8L);
+    public static final EntityId SYSTEM_TIMESTAMP_VALUE_TYPE = new EntityId(9L);
 
     // --- Scalar primitive type entities (10..19) ---
     public static final EntityId SCALAR_STRING = new EntityId(10L);
@@ -65,6 +66,10 @@ public final class BootstrapIds {
     public static final EntityId PROPAGATION_PERMISSION = new EntityId(67L);
     public static final EntityId HAS_INVERSE_PREDICATE = new EntityId(68L);
     public static final EntityId HAS_SUPER_PREDICATE = new EntityId(69L);
+
+    // --- Stage 10: Bitemporal Validity Predicates (70..79) ---
+    public static final EntityId VALID_FROM = new EntityId(70L);
+    public static final EntityId VALID_TO = new EntityId(71L);
 
     private BootstrapIds() {
     }

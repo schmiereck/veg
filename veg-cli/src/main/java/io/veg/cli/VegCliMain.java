@@ -48,6 +48,7 @@ import io.veg.model.RdfExportResult;
 import io.veg.model.RdfFormat;
 import io.veg.model.RdfImportResult;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.SavepointId;
 import io.veg.model.Value;
 import io.veg.model.ValueType;
@@ -59,6 +60,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
@@ -424,11 +426,63 @@ public final class VegCliMain {
                     for (Path p : walk.sorted(Comparator.reverseOrder()).toList()) {
                         Files.deleteIfExists(p);
                     }
-                } catch (IOException ignored) {
+            } catch (IOException ignored) {
                     // Best-effort temp cleanup.
                 }
             }
         }
+
+        runStage10Demo(out);
+    }
+
+    private static void runStage10Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 10 MVCC, Auto-Indexing, Bitemporality, Cherry-Pick & GDPR Redaction Demo ===");
+        VersionedGraphDatabase db = new PersistentTreeVersionedDatabase();
+        Instant q1 = Instant.parse("2026-01-01T00:00:00Z");
+        Instant q2 = Instant.parse("2026-04-01T00:00:00Z");
+
+        EntityId empType;
+        EntityId ssnType;
+        EntityId hasSsn;
+        EntityId emp;
+        EntityId ssnVal;
+        CommitId base;
+
+        try (GraphTransaction tx = db.beginTransaction(Actor.user("hr"), Reason.of("onboard"), "HR-100")) {
+            empType = tx.defineObjectType("Contractor");
+            ssnType = tx.defineValueType("TaxId", ValueType.STRING);
+            hasSsn = tx.definePredicate("hasTaxId", empType, ssnType);
+            emp = tx.createObject(empType);
+            ssnVal = tx.createValue(ssnType, Value.of("DE-999-SECRET"));
+            tx.connectWithValidity(emp, hasSsn, ssnVal, q1, q2);
+            base = tx.commit();
+        }
+
+        CommitId retryFirst = db.executeIdempotent(
+                "main", "cli-idem-1", Actor.user("api"), Reason.of("idempotent onboard"), "HR-100",
+                tx -> tx.createObject(empType));
+        CommitId retrySecond = db.executeIdempotent(
+                "main", "cli-idem-1", Actor.user("api"), Reason.of("idempotent onboard"), "HR-100",
+                tx -> tx.createObject(empType));
+
+        db.createBranch("feature/fix", base);
+        CommitId cHotfix;
+        try (GraphTransaction tx = db.beginTransaction("feature/fix", Actor.user("dev"), Reason.of("patch"))) {
+            tx.createObject(empType);
+            cHotfix = tx.commit();
+        }
+        MergeResult cherry = db.cherryPick(cHotfix, "main", Actor.user("release"), Reason.of("cherry-pick"));
+        RedactionReceipt receipt = db.redactEntityPayload(ssnVal, Actor.user("dpo"), Reason.of("GDPR Art. 17"));
+
+        out.println("Type-indexed contractors=" + db.currentSnapshot().findEntitiesByType(empType).size()
+                + ", bitemporal valid(Feb)=" + db.currentSnapshot().validAt(Instant.parse("2026-02-15T00:00:00Z")).findOutgoingEdges(emp, hasSsn).size()
+                + ", valid(Apr)=" + db.currentSnapshot().validAt(q2).findOutgoingEdges(emp, hasSsn).size());
+        out.println("Idempotent retry sameCommit=" + retryFirst.equals(retrySecond)
+                + ", cherryPickSucceeded=" + cherry.succeeded()
+                + ", correlatedHR100=" + db.commitsByCorrelationId("HR-100").size()
+                + ", redactedValue=" + db.asOf(base).findEntity(ssnVal).orElseThrow().payload().orElseThrow()
+                + ", redactionAffectedCommits=" + receipt.affectedCommitCount());
     }
 
     private static int runImportRdf(String[] args, PrintStream out, PrintStream err) throws IOException {

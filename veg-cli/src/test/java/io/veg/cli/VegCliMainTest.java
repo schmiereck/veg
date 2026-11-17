@@ -32,7 +32,8 @@ class VegCliMainTest {
                 "VEG Stage 5", "HISTORICAL_HEAD_DENY",
                 "VEG Stage 6", "LUBM imported objects=42", "BSBM imported objects=32", "reifiedAnnotations=2",
                 "VEG Stage 7", "Same LUBM+inc query across EngineA/B/C rows=8/8/8",
-                "VEG Stage 8", "truncatedTailFrames=1", "headMatchesPreCrash=true"
+                "VEG Stage 8", "truncatedTailFrames=1", "headMatchesPreCrash=true",
+                "VEG Stage 10", "Idempotent retry sameCommit=true", "cherryPickSucceeded=true", "[REDACTED]"
         );
     }
 

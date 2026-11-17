@@ -104,3 +104,10 @@ Durch [CommitPublicationTarget](file:///C:/Users/thomas/Projekte/veg/veg-engine-
 - `BinaryGraphCodec` — Deterministische Binärkodierung (ohne 64-KB-UTF8-Limit, volle Nanosekunden-/Scale-Präzision für `Instant`/`BigDecimal`) inklusive `CRC32C`-Envelope und GZIP-Kompression.
 - `WriteAheadLogStore` — Geframetes Append-Only WAL (`wal.log`) mit Tail-Trailer (`0x454E4443`), `FSYNC_EVERY_COMMIT`/`FLUSH_OS_BUFFER`, automatischem Tail-Truncate (`T17`) und strikter Erkennung innerer Korruption (`StorageCorruptionException`, `P-08`).
 - `CheckpointAndArchiveStore` — Atomare `.tmp`-Schreibpfade für `refs.meta`, `checkpoints/ckpt-*.bin.gz`, `archive/segment-*.wal.gz`, Tempfile-Bereinigung sowie `backupTo`/`restoreFrom`. Siehe [ADR-0009](adr/0009-persistent-wal-checkpoints-and-crash-recovery.md).
+
+## Stufe-10-Produktionsreife (`veg-model`, `veg-engine-api`, `veg-engine-memory`, `veg-engine-persistent`)
+
+- **MVCC & Idempotenz:** `ReentrantReadWriteLock` trennt lock-freie Snapshot-Reads von atomarer Commit-Publikation (`OptimisticCommitConflictException`, `IdempotentCommitSupport`), ergänzt um Vorgangs-Auditing über `commitsByCorrelationId` (`V-15`).
+- **Automatische Indizes & Memoization (`P-05`):** Strukturelle `entitiesByType`-Indizes (`PersistentLongMap`, CSR-Typindex, `MutableGraphState`) und `SnapshotAclCache` pro unveränderlichem Snapshot.
+- **Bitemporalität (`V-14`):** Bootstrap-Prädikate `VALID_FROM`/`VALID_TO` mit `SYSTEM_TIMESTAMP_VALUE_TYPE`, `ValidityWindow`, `BitemporalGraphReader` (`validAt`, `asOfBitemporal`, `asOfSystemAndValidTime`).
+- **Cherry-Pick (`V-16`) & DSGVO-Redaktion (`S-09`):** `ThreeWayMergeEngine.prepareCherryPick`, `RedactionEngine` + rückstandsfreie Disk-Propagierung in `PersistentDiskVersionedDatabase`. Siehe [ADR-0010](adr/0010-mvcc-auto-indexing-bitemporality-and-gdpr-redaction.md).

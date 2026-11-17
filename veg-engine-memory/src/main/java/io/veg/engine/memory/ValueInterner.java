@@ -24,4 +24,8 @@ final class ValueInterner {
     int distinctValueCount() {
         return pool.size();
     }
+
+    void clear() {
+        pool.clear();
+    }
 }

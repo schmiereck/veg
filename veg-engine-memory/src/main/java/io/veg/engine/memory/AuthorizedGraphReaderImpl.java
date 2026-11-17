@@ -12,6 +12,7 @@ import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.ValidityWindow;
 import io.veg.model.ValueMutability;
 
 import java.util.List;
@@ -283,6 +284,26 @@ final class AuthorizedGraphReaderImpl implements AuthorizedGraphReader {
         return targetSnapshot.findIncomingEdges(targetId, predicateId).stream()
                 .filter(edge -> canRead(edge.id()))
                 .toList();
+    }
+
+    @Override
+    public List<EntityNode> findEntitiesByType(EntityId typeId) {
+        Objects.requireNonNull(typeId, "typeId must not be null");
+        if (isBranchAccessDenied()) {
+            return List.of();
+        }
+        return targetSnapshot.findEntitiesByType(typeId).stream()
+                .filter(node -> canRead(node.id()))
+                .toList();
+    }
+
+    @Override
+    public Optional<ValidityWindow> resolveValidityWindow(EntityId entityOrEdgeId) {
+        Objects.requireNonNull(entityOrEdgeId, "entityOrEdgeId must not be null");
+        if (!canRead(entityOrEdgeId)) {
+            return Optional.empty();
+        }
+        return targetSnapshot.resolveValidityWindow(entityOrEdgeId);
     }
 
     @Override

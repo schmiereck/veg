@@ -10,9 +10,12 @@ import io.veg.model.GraphDiff;
 import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Reason;
+import io.veg.model.RedactionReceipt;
 import io.veg.model.Tag;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -153,4 +156,93 @@ public interface VersionedGraphDatabase {
     default AuthorizedGraphReader authorizedAsOf(CommitId commitId, Actor actor) {
         return authorizedAsOf(commitId, java.util.Objects.requireNonNull(actor, "actor").id());
     }
+
+    // --- Stage 10: MVCC retry/idempotency, correlation audit, cherry-pick, bitemporal & redaction ---
+
+    default List<Commit> commitsByCorrelationId(String correlationId) {
+        Objects.requireNonNull(correlationId, "correlationId must not be null");
+        if (correlationId.isBlank()) {
+            throw new IllegalArgumentException("correlationId must not be blank");
+        }
+        return commitHistory().stream()
+                .filter(c -> c.correlationId().filter(correlationId::equals).isPresent())
+                .toList();
+    }
+
+    default CommitId executeWithRetry(
+            String branchName,
+            Actor actor,
+            Reason reason,
+            String correlationId,
+            int maxAttempts,
+            Consumer<GraphTransaction> work
+    ) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        Objects.requireNonNull(actor, "actor must not be null");
+        Objects.requireNonNull(reason, "reason must not be null");
+        Objects.requireNonNull(work, "work must not be null");
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts must be >= 1, was: " + maxAttempts);
+        }
+        OptimisticCommitConflictException lastConflict = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try (GraphTransaction tx = beginTransaction(branchName, actor, reason, correlationId)) {
+                work.accept(tx);
+                if (!tx.isOpen()) {
+                    throw new TransactionStateException(
+                            "Transaction callback must leave closing/committing to executeWithRetry");
+                }
+                return tx.commit();
+            } catch (OptimisticCommitConflictException conflict) {
+                lastConflict = conflict;
+            }
+        }
+        throw lastConflict;
+    }
+
+    default CommitId executeWithRetry(
+            Actor actor,
+            Reason reason,
+            int maxAttempts,
+            Consumer<GraphTransaction> work
+    ) {
+        return executeWithRetry(currentBranch(), actor, reason, null, maxAttempts, work);
+    }
+
+    CommitId executeIdempotent(
+            String branchName,
+            String idempotencyKey,
+            Actor actor,
+            Reason reason,
+            String correlationId,
+            Consumer<GraphTransaction> work
+    );
+
+    MergeResult cherryPick(CommitId sourceCommitId, String targetBranch, Actor actor, Reason reason);
+
+    default GraphReader asOfBitemporal(CommitId systemCommitId, Instant validTime) {
+        Objects.requireNonNull(systemCommitId, "systemCommitId must not be null");
+        Objects.requireNonNull(validTime, "validTime must not be null");
+        return asOf(systemCommitId).validAt(validTime);
+    }
+
+    default GraphReader asOfSystemAndValidTime(String branchName, Instant systemTime, Instant validTime) {
+        Objects.requireNonNull(branchName, "branchName must not be null");
+        Objects.requireNonNull(systemTime, "systemTime must not be null");
+        Objects.requireNonNull(validTime, "validTime must not be null");
+        CommitId cursor = branchHead(branchName);
+        while (cursor != null) {
+            Commit commit = getCommit(cursor);
+            if (!commit.timestamp().isAfter(systemTime)) {
+                return asOf(commit.id()).validAt(validTime);
+            }
+            cursor = commit.parentId().orElse(null);
+        }
+        throw new CommitNotFoundException(
+                "No commit on branch '" + branchName + "' exists at or before systemTime " + systemTime);
+    }
+
+    RedactionReceipt redactEntityPayload(EntityId valueEntityId, Actor actor, Reason reason);
+
+    List<RedactionReceipt> listRedactionReceipts();
 }

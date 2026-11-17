@@ -9,6 +9,7 @@ import io.veg.fixtures.Stage3ContractTestSuite;
 import io.veg.fixtures.Stage4ContractTestSuite;
 import io.veg.fixtures.Stage5ContractTestSuite;
 import io.veg.fixtures.Stage6ContractTestSuite;
+import io.veg.fixtures.Stage10ContractTestSuite;
 import io.veg.model.Actor;
 import io.veg.model.CommitId;
 import io.veg.model.EntityId;
@@ -57,6 +58,10 @@ class PersistentTreeEngineContractTest {
     }
 
     @Nested class CStage6 extends Stage6ContractTestSuite {
+        @Override protected VersionedGraphDatabase createDatabase() { return new PersistentTreeVersionedDatabase(); }
+    }
+
+    @Nested class CStage10 extends Stage10ContractTestSuite {
         @Override protected VersionedGraphDatabase createDatabase() { return new PersistentTreeVersionedDatabase(); }
     }
 
