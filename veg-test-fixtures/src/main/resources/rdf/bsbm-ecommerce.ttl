@@ -1,0 +1,116 @@
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix bsbm: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/vocabulary/> .
+@prefix inst: <http://www4.wiwiss.fu-berlin.de/bizer/bsbm/v01/instances/> .
+@prefix veg:  <http://veg.io/meta#> .
+
+# --- BSBM Vocabulary ---
+bsbm:Producer a rdfs:Class .
+bsbm:Product  a rdfs:Class .
+bsbm:Vendor   a rdfs:Class .
+bsbm:Offer    a rdfs:Class .
+bsbm:Review   a rdfs:Class .
+bsbm:AuditSource a rdfs:Class .
+
+bsbm:producer        a rdf:Property .
+bsbm:product         a rdf:Property .
+bsbm:vendor          a rdf:Property .
+bsbm:reviewFor       a rdf:Property .
+bsbm:hasWeight       a rdf:Property .
+bsbm:hasConfidence   a rdf:Property .
+bsbm:supportedBy     a rdf:Property .
+
+# --- Producers (3) ---
+inst:Producer1 a bsbm:Producer ; bsbm:name "Nordic Optics GmbH" ;  bsbm:country "DE" .
+inst:Producer2 a bsbm:Producer ; bsbm:name "Alpine Electronics" ;  bsbm:country "CH" .
+inst:Producer3 a bsbm:Producer ; bsbm:name "Atlantic Systems" ;    bsbm:country "US" .
+
+# --- Audit Sources for Provenance (T18 / S-07) ---
+inst:LabReport2026 a bsbm:AuditSource ; bsbm:name "TUV Quality Audit 2026" .
+inst:VerifiedBuyerLog a bsbm:AuditSource ; bsbm:name "Verified Purchase Telemetry" .
+
+# --- Products (6) ---
+inst:Product1 a bsbm:Product ;
+    bsbm:productName "Precision Spectrometer S1" ;
+    bsbm:category "Optics" ;
+    bsbm:rating 4.8 ;
+    bsbm:producer inst:Producer1 .
+
+inst:Product2 a bsbm:Product ;
+    bsbm:productName "Laser Interferometer L9" ;
+    bsbm:category "Optics" ;
+    bsbm:rating 4.5 ;
+    bsbm:producer inst:Producer1 .
+
+inst:Product3 a bsbm:Product ;
+    bsbm:productName "Industrial Sensor Hub X4" ;
+    bsbm:category "Sensors" ;
+    bsbm:rating 4.7 ;
+    bsbm:producer inst:Producer2 .
+
+inst:Product4 a bsbm:Product ;
+    bsbm:productName "Thermal Camera T200" ;
+    bsbm:category "Sensors" ;
+    bsbm:rating 4.2 ;
+    bsbm:producer inst:Producer2 .
+
+inst:Product5 a bsbm:Product ;
+    bsbm:productName "Edge Telemetry Gateway G2" ;
+    bsbm:category "Networking" ;
+    bsbm:rating 4.9 ;
+    bsbm:producer inst:Producer3 .
+
+inst:Product6 a bsbm:Product ;
+    bsbm:productName "Fiber Patch Analyzer F1" ;
+    bsbm:category "Networking" ;
+    bsbm:rating 3.9 ;
+    bsbm:producer inst:Producer3 .
+
+# --- Vendors (3) ---
+inst:Vendor1 a bsbm:Vendor ; bsbm:name "EuroTrade Direct" ;   bsbm:country "DE" .
+inst:Vendor2 a bsbm:Vendor ; bsbm:name "SwissSupply AG" ;     bsbm:country "CH" .
+inst:Vendor3 a bsbm:Vendor ; bsbm:name "GlobalParts Corp" ;   bsbm:country "US" .
+
+# --- Offers (10) ---
+inst:Offer1  a bsbm:Offer ; bsbm:product inst:Product1 ; bsbm:vendor inst:Vendor1 ; bsbm:price 1250.00 ; bsbm:validDays 14 ; bsbm:inStock true .
+inst:Offer2  a bsbm:Offer ; bsbm:product inst:Product1 ; bsbm:vendor inst:Vendor2 ; bsbm:price 1190.50 ; bsbm:validDays 10 ; bsbm:inStock true .
+inst:Offer3  a bsbm:Offer ; bsbm:product inst:Product2 ; bsbm:vendor inst:Vendor1 ; bsbm:price 890.00 ;  bsbm:validDays 7  ; bsbm:inStock false .
+inst:Offer4  a bsbm:Offer ; bsbm:product inst:Product3 ; bsbm:vendor inst:Vendor2 ; bsbm:price 340.00 ;  bsbm:validDays 30 ; bsbm:inStock true .
+inst:Offer5  a bsbm:Offer ; bsbm:product inst:Product3 ; bsbm:vendor inst:Vendor3 ; bsbm:price 315.90 ;  bsbm:validDays 21 ; bsbm:inStock true .
+inst:Offer6  a bsbm:Offer ; bsbm:product inst:Product4 ; bsbm:vendor inst:Vendor1 ; bsbm:price 499.00 ;  bsbm:validDays 14 ; bsbm:inStock true .
+inst:Offer7  a bsbm:Offer ; bsbm:product inst:Product4 ; bsbm:vendor inst:Vendor3 ; bsbm:price 475.00 ;  bsbm:validDays 5  ; bsbm:inStock false .
+inst:Offer8  a bsbm:Offer ; bsbm:product inst:Product5 ; bsbm:vendor inst:Vendor1 ; bsbm:price 420.00 ;  bsbm:validDays 45 ; bsbm:inStock true .
+inst:Offer9  a bsbm:Offer ; bsbm:product inst:Product5 ; bsbm:vendor inst:Vendor2 ; bsbm:price 450.00 ;  bsbm:validDays 30 ; bsbm:inStock true .
+inst:Offer10 a bsbm:Offer ; bsbm:product inst:Product6 ; bsbm:vendor inst:Vendor3 ; bsbm:price 189.95 ;  bsbm:validDays 12 ; bsbm:inStock true .
+
+# --- Reviews (8) ---
+inst:Review1 a bsbm:Review ; bsbm:reviewFor inst:Product1 ; bsbm:reviewerName "Dr. K. Berg" ;  bsbm:score 9 ; bsbm:comment "High optical stability under lab vibration." .
+inst:Review2 a bsbm:Review ; bsbm:reviewFor inst:Product1 ; bsbm:reviewerName "M. Lindner" ;   bsbm:score 10 ; bsbm:comment "Calibration held within 0.01nm across runs." .
+inst:Review3 a bsbm:Review ; bsbm:reviewFor inst:Product2 ; bsbm:reviewerName "S. Nowak" ;     bsbm:score 8 ; bsbm:comment "Reliable optics, heavy housing." .
+inst:Review4 a bsbm:Review ; bsbm:reviewFor inst:Product3 ; bsbm:reviewerName "T. Meier" ;     bsbm:score 9 ; bsbm:comment "Low latency telemetry output." .
+inst:Review5 a bsbm:Review ; bsbm:reviewFor inst:Product4 ; bsbm:reviewerName "A. Costa" ;     bsbm:score 7 ; bsbm:comment "Good thermal contrast, slow boot." .
+inst:Review6 a bsbm:Review ; bsbm:reviewFor inst:Product5 ; bsbm:reviewerName "J. Hoffmann" ;  bsbm:score 10 ; bsbm:comment "Zero packet loss over 90 days." .
+inst:Review7 a bsbm:Review ; bsbm:reviewFor inst:Product5 ; bsbm:reviewerName "R. Schulz" ;    bsbm:score 9 ; bsbm:comment "Clean PoE power budget." .
+inst:Review8 a bsbm:Review ; bsbm:reviewFor inst:Product6 ; bsbm:reviewerName "N. Braun" ;     bsbm:score 6 ; bsbm:comment "Basic UI, adequate fiber metrics." .
+
+# --- Reified Provenance & Weight/Confidence Assertions (S-07, T18) ---
+[
+    a rdf:Statement ;
+    rdf:subject inst:Review1 ;
+    rdf:predicate bsbm:reviewFor ;
+    rdf:object inst:Product1 ;
+    bsbm:hasWeight 1.0 ;
+    bsbm:hasConfidence 0.96 ;
+    bsbm:supportedBy inst:LabReport2026
+] .
+
+[
+    a rdf:Statement ;
+    rdf:subject inst:Offer5 ;
+    rdf:predicate bsbm:product ;
+    rdf:object inst:Product3 ;
+    bsbm:hasWeight 0.85 ;
+    bsbm:hasConfidence 0.92 ;
+    bsbm:supportedBy inst:VerifiedBuyerLog
+] .

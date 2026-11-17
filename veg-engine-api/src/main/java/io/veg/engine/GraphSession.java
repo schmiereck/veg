@@ -4,6 +4,8 @@ import io.veg.model.EntityId;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
 import io.veg.model.PropagationDirection;
+import io.veg.model.RdfFormat;
+import io.veg.model.RdfImportResult;
 import io.veg.model.Value;
 import io.veg.model.ValueMutability;
 import io.veg.model.ValueType;
@@ -65,4 +67,14 @@ public interface GraphSession extends GraphReader {
     void defineInversePredicate(EntityId predicateId, EntityId inversePredicateId);
 
     void defineSubPredicate(EntityId subPredicateId, EntityId superPredicateId);
+
+    // --- Stage 6: RDF/Turtle dataset ingestion ---
+
+    default RdfImportResult importRdf(String content, RdfFormat format) {
+        return RdfGraphImporter.importRdf(this, content, format);
+    }
+
+    default RdfImportResult importTurtle(String turtleContent) {
+        return RdfGraphImporter.importRdf(this, turtleContent, RdfFormat.TURTLE);
+    }
 }

@@ -1,0 +1,169 @@
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix lubm: <http://swat.cse.lehigh.edu/onto/univ-bench.owl#> .
+@prefix data: <http://www.Department0.University0.edu/> .
+
+# --- LUBM Ontology Core Classes & Semantic Predicate Rules ---
+lubm:University  a rdfs:Class .
+lubm:Department  a rdfs:Class .
+lubm:Professor   a rdfs:Class .
+lubm:Course      a rdfs:Class .
+lubm:Student     a rdfs:Class .
+lubm:Publication a rdfs:Class .
+
+lubm:memberOf              a rdf:Property .
+lubm:worksFor              a rdf:Property ; rdfs:subPropertyOf lubm:memberOf .
+lubm:headOf                a rdf:Property ; rdfs:subPropertyOf lubm:worksFor .
+lubm:chairOf               a rdf:Property ; rdfs:subPropertyOf lubm:headOf .
+lubm:affiliatedDepartment  a rdf:Property .
+lubm:subOrganizationOf     a rdf:Property .
+
+lubm:degreeFrom  a rdf:Property .
+lubm:hasAlumnus  a rdf:Property ; owl:inverseOf lubm:degreeFrom .
+
+lubm:hasAdvisor  a rdf:Property .
+lubm:advisorOf   a rdf:Property ; owl:inverseOf lubm:hasAdvisor .
+
+lubm:teachesCourse     a rdf:Property .
+lubm:takesCourse       a rdf:Property .
+lubm:publicationAuthor a rdf:Property .
+
+# --- Universities (2) ---
+data:University0 a lubm:University ;
+    lubm:name "Lehigh University" ;
+    lubm:country "US" .
+
+data:University1 a lubm:University ;
+    lubm:name "TU Graph Research" ;
+    lubm:country "DE" .
+
+# --- Departments (4) ---
+data:DeptCS0 a lubm:Department ;
+    lubm:name "Computer Science Dept 0" ;
+    lubm:subOrganizationOf data:University0 .
+
+data:DeptEE0 a lubm:Department ;
+    lubm:name "Electrical Engineering Dept 0" ;
+    lubm:subOrganizationOf data:University0 .
+
+data:DeptCS1 a lubm:Department ;
+    lubm:name "Informatics Dept 1" ;
+    lubm:subOrganizationOf data:University1 .
+
+data:DeptMath1 a lubm:Department ;
+    lubm:name "Applied Mathematics Dept 1" ;
+    lubm:subOrganizationOf data:University1 .
+
+# --- Professors (8 across chairOf -> headOf -> worksFor -> memberOf hierarchy) ---
+data:Prof0 a lubm:Professor ;
+    lubm:name "Prof. Ada Lovelace" ;
+    lubm:rank "FullProfessor" ;
+    lubm:researchInterest "Graph Databases" ;
+    lubm:emailAddress "ada@univ0.edu" ;
+    lubm:tenureYears 18 ;
+    lubm:chairOf data:University0 ;
+    lubm:affiliatedDepartment data:DeptCS0 ;
+    lubm:teachesCourse data:Course0, data:Course1 .
+
+data:Prof1 a lubm:Professor ;
+    lubm:name "Prof. Alan Turing" ;
+    lubm:rank "FullProfessor" ;
+    lubm:researchInterest "Formal Reasoning" ;
+    lubm:emailAddress "turing@univ0.edu" ;
+    lubm:tenureYears 15 ;
+    lubm:headOf data:University0 ;
+    lubm:affiliatedDepartment data:DeptCS0 ;
+    lubm:teachesCourse data:Course2 .
+
+data:Prof2 a lubm:Professor ;
+    lubm:name "Prof. Grace Hopper" ;
+    lubm:rank "FullProfessor" ;
+    lubm:researchInterest "Compilers and Storage" ;
+    lubm:emailAddress "hopper@univ0.edu" ;
+    lubm:tenureYears 20 ;
+    lubm:worksFor data:University0 ;
+    lubm:affiliatedDepartment data:DeptEE0 ;
+    lubm:teachesCourse data:Course3 .
+
+data:Prof3 a lubm:Professor ;
+    lubm:name "Prof. Edgar Codd" ;
+    lubm:rank "AssociateProfessor" ;
+    lubm:researchInterest "Relational Theory" ;
+    lubm:emailAddress "codd@univ0.edu" ;
+    lubm:tenureYears 11 ;
+    lubm:worksFor data:University0 ;
+    lubm:affiliatedDepartment data:DeptCS0 .
+
+data:Prof4 a lubm:Professor ;
+    lubm:name "Prof. Barbara Liskov" ;
+    lubm:rank "FullProfessor" ;
+    lubm:researchInterest "Distributed Data" ;
+    lubm:emailAddress "liskov@univ0.edu" ;
+    lubm:tenureYears 16 ;
+    lubm:memberOf data:University0 ;
+    lubm:affiliatedDepartment data:DeptEE0 .
+
+data:Prof5 a lubm:Professor ;
+    lubm:name "Prof. Konrad Zuse" ;
+    lubm:rank "FullProfessor" ;
+    lubm:researchInterest "Graph Engines" ;
+    lubm:emailAddress "zuse@univ1.edu" ;
+    lubm:tenureYears 14 ;
+    lubm:chairOf data:University1 ;
+    lubm:affiliatedDepartment data:DeptCS1 ;
+    lubm:teachesCourse data:Course4 .
+
+data:Prof6 a lubm:Professor ;
+    lubm:name "Prof. Emmy Noether" ;
+    lubm:rank "AssociateProfessor" ;
+    lubm:researchInterest "Algebraic Structures" ;
+    lubm:emailAddress "noether@univ1.edu" ;
+    lubm:tenureYears 10 ;
+    lubm:headOf data:University1 ;
+    lubm:affiliatedDepartment data:DeptMath1 ;
+    lubm:teachesCourse data:Course5 .
+
+data:Prof7 a lubm:Professor ;
+    lubm:name "Prof. Donald Knuth" ;
+    lubm:rank "AssistantProfessor" ;
+    lubm:researchInterest "Algorithms" ;
+    lubm:emailAddress "knuth@univ1.edu" ;
+    lubm:tenureYears 5 ;
+    lubm:worksFor data:University1 ;
+    lubm:affiliatedDepartment data:DeptCS1 .
+
+# --- Courses (6) ---
+data:Course0 a lubm:Course ; lubm:name "CS501 Versioned Graphs" ; lubm:credits 6 .
+data:Course1 a lubm:Course ; lubm:name "CS602 Knowledge Representation" ; lubm:credits 6 .
+data:Course2 a lubm:Course ; lubm:name "CS520 Computability Theory" ; lubm:credits 5 .
+data:Course3 a lubm:Course ; lubm:name "EE410 Memory Architectures" ; lubm:credits 5 .
+data:Course4 a lubm:Course ; lubm:name "INF701 Temporal Databases" ; lubm:credits 6 .
+data:Course5 a lubm:Course ; lubm:name "MATH610 Category Theory" ; lubm:credits 4 .
+
+# --- Students (12) ---
+data:Student0  a lubm:Student ; lubm:name "Alice Mayer" ;   lubm:level "Graduate" ;      lubm:gpa 3.92 ; lubm:hasAdvisor data:Prof0 ; lubm:degreeFrom data:University0 ; lubm:takesCourse data:Course0, data:Course1 .
+data:Student1  a lubm:Student ; lubm:name "Bob Klein" ;     lubm:level "Graduate" ;      lubm:gpa 3.75 ; lubm:hasAdvisor data:Prof0 ; lubm:degreeFrom data:University0 ; lubm:takesCourse data:Course0 .
+data:Student2  a lubm:Student ; lubm:name "Clara Weber" ;   lubm:level "Undergraduate" ; lubm:gpa 3.60 ; lubm:hasAdvisor data:Prof1 ; lubm:takesCourse data:Course2 .
+data:Student3  a lubm:Student ; lubm:name "David Roth" ;    lubm:level "Graduate" ;      lubm:gpa 3.85 ; lubm:hasAdvisor data:Prof1 ; lubm:degreeFrom data:University0 ; lubm:takesCourse data:Course2 .
+data:Student4  a lubm:Student ; lubm:name "Eva Fuchs" ;     lubm:level "Graduate" ;      lubm:gpa 3.95 ; lubm:hasAdvisor data:Prof2 ; lubm:degreeFrom data:University0 ; lubm:takesCourse data:Course3 .
+data:Student5  a lubm:Student ; lubm:name "Frank Becker" ;  lubm:level "Undergraduate" ; lubm:gpa 3.30 ; lubm:hasAdvisor data:Prof3 ; lubm:takesCourse data:Course0 .
+data:Student6  a lubm:Student ; lubm:name "Greta Hoffmann" ;lubm:level "Graduate" ;      lubm:gpa 3.88 ; lubm:hasAdvisor data:Prof4 ; lubm:degreeFrom data:University0 ; lubm:takesCourse data:Course3 .
+data:Student7  a lubm:Student ; lubm:name "Hannah Wolf" ;   lubm:level "Graduate" ;      lubm:gpa 3.91 ; lubm:hasAdvisor data:Prof5 ; lubm:degreeFrom data:University1 ; lubm:takesCourse data:Course4 .
+data:Student8  a lubm:Student ; lubm:name "Ivan Neumann" ;  lubm:level "Graduate" ;      lubm:gpa 3.68 ; lubm:hasAdvisor data:Prof5 ; lubm:degreeFrom data:University1 ; lubm:takesCourse data:Course4 .
+data:Student9  a lubm:Student ; lubm:name "Julia Richter" ; lubm:level "Undergraduate" ; lubm:gpa 3.45 ; lubm:hasAdvisor data:Prof6 ; lubm:takesCourse data:Course5 .
+data:Student10 a lubm:Student ; lubm:name "Kevin Bauer" ;   lubm:level "Graduate" ;      lubm:gpa 3.79 ; lubm:hasAdvisor data:Prof6 ; lubm:degreeFrom data:University1 ; lubm:takesCourse data:Course5 .
+data:Student11 a lubm:Student ; lubm:name "Lena Braun" ;    lubm:level "Graduate" ;      lubm:gpa 3.84 ; lubm:hasAdvisor data:Prof7 ; lubm:degreeFrom data:University1 ; lubm:takesCourse data:Course4 .
+
+# --- Publications (10) ---
+data:Pub0 a lubm:Publication ; lubm:title "Versioned Entity Graphs at Scale" ;       lubm:year 2024 ; lubm:publicationAuthor data:Prof0, data:Student0 .
+data:Pub1 a lubm:Publication ; lubm:title "Structural DAGs for Graph Versioning" ;    lubm:year 2025 ; lubm:publicationAuthor data:Prof0 .
+data:Pub2 a lubm:Publication ; lubm:title "Cycle-Safe Graph Access Control" ;       lubm:year 2025 ; lubm:publicationAuthor data:Prof1, data:Student3 .
+data:Pub3 a lubm:Publication ; lubm:title "Shared Value Semantics in Graph Stores" ;  lubm:year 2023 ; lubm:publicationAuthor data:Prof2, data:Student4 .
+data:Pub4 a lubm:Publication ; lubm:title "Schema Evolution with Historical Replay" ; lubm:year 2024 ; lubm:publicationAuthor data:Prof3 .
+data:Pub5 a lubm:Publication ; lubm:title "Selective Staging for Semantic Schemas" ;  lubm:year 2025 ; lubm:publicationAuthor data:Prof4, data:Student6 .
+data:Pub6 a lubm:Publication ; lubm:title "Bitemporal Graph Compaction" ;             lubm:year 2024 ; lubm:publicationAuthor data:Prof5, data:Student7 .
+data:Pub7 a lubm:Publication ; lubm:title "Sub-Property Query Rewriting" ;          lubm:year 2025 ; lubm:publicationAuthor data:Prof5 .
+data:Pub8 a lubm:Publication ; lubm:title "Invariants of Ordered Graph Trees" ;       lubm:year 2023 ; lubm:publicationAuthor data:Prof6, data:Student10 .
+data:Pub9 a lubm:Publication ; lubm:title "Algorithmic Foundations of Triple Export" ; lubm:year 2026 ; lubm:publicationAuthor data:Prof7, data:Student11 .

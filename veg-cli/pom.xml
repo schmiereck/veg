@@ -20,6 +20,10 @@
             <artifactId>veg-benchmarks</artifactId>
         </dependency>
         <dependency>
+            <groupId>io.veg</groupId>
+            <artifactId>veg-test-fixtures</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>

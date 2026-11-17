@@ -238,3 +238,45 @@ Dieses Laborbuch dokumentiert gemäß Abschnitt 12 des Konzepts jede Entwicklung
 
 - **Nächster kleinster sinnvoller Versuch (Stufe 6):**  
   Entwurf einer storage-unabhängigen Graph-Query-/Traversierungs-API (inkl. abgeleiteter Aussagen und `AuthorizedGraphReader`-Integration) sowie RDF-/Turtle-Export (`T18`).
+
+---
+
+## Eintrag 06 — Stufe 6: Storage-unabhängige Query-API/DSL, RDF/Turtle-Interoperabilität & LUBM/BSBM-Datensätze
+
+- **Datum:** 2026-11-17
+- **Stufe / Hypothese:**  
+  **Stufe 6** (`S-04`, `S-06`, `S-07`, `P-01`, `M-12`, `T18`):  
+  1. Eine strikt gegen `GraphReader` definierte Fluent-Query-API (`GraphQuery`) und kompakte deklarative DSL (`GraphQueryDsl`) erlaubt typsichere Filter, Joins, Traversierungen, Sortierungen und Paging identisch über Live-Snapshots, Feature-Branches, `asOf` sowie `AuthorizedGraphReader`-Sichten hinweg.  
+  2. Standard-RDF-Datensätze mittlerer Komplexität (**LUBM** und **BSBM** im Turtle-Format) inklusive `rdfs:subPropertyOf`, `owl:inverseOf` und `rdf:Statement`-Provenienz (`hasWeight`, `hasConfidence`, `supportedBy`) lassen sich verlustfrei importieren, abfragen und per Turtle/N-Triples-Export wieder reproduzieren (`T18`).
+
+- **Implementiert:**  
+  - `veg-model`: `ComparisonOperator`, `SortDirection`, `SortOrder`, `QueryRow`, `RdfFormat`, `RdfExportOptions`, `RdfExportResult`, `RdfImportResult`, Unit-Tests in `QueryAndRdfModelTest` (3 Tests).
+  - `veg-engine-api`: `GraphQuery`, `GraphQueryDsl`, `QuerySyntaxException`, `RdfGraphExporter`, `RdfGraphImporter`, Convenience-Default-Methoden auf `GraphReader` (`query`, `executeQuery`, `exportRdf`, `exportTurtle`) und `GraphSession` (`importRdf`, `importTurtle`).
+  - `veg-test-fixtures` & Tests: Bundled Standard-Turtle-Benchmarks `rdf/lubm-university.ttl` (42 Fachobjekte mit `chairOf -> headOf -> worksFor -> memberOf`, `hasAlumnus owl:inverseOf degreeFrom`) und `rdf/bsbm-ecommerce.ttl` (32 Fachobjekte inkl. 2 reifizierter `rdf:Statement`-Provenienzblöcke), `RdfBenchmarkDatasets`, `Stage6ContractTestSuite` / `InMemoryStage6ContractTest` (10 Contract-Tests inkl. `AuthorizedGraphReader`-Schutz, LUBM-Inferenzabfragen, BSBM-Angebotsanalyse und `T18` Turtle/N-Triples Round-Trip & Warnung bei `includeReifiedProvenance=false`).
+  - `veg-cli`: Erweiterung von `VegCliMain` um `runStage6Demo` sowie den neuen CLI-Befehl `import-rdf --input ... [--format turtle|ntriples] [--query ...] [--export ...]`; Tests in `VegCliMainTest` (4 Tests).
+  - Dokumentation: [ADR-0007](adr/0007-query-dsl-and-rdf-turtle-interoperability.md), Erweiterung von [INVARIANTS.md](INVARIANTS.md) (`I-20`–`I-21`), [ARCHITECTURE.md](ARCHITECTURE.md), [CONCEPT.md](CONCEPT.md), [README.md](README.md).
+
+- **Tests (bestanden/fehlgeschlagen):**  
+  `.\mvnw.cmd clean verify` — **119 / 119 Tests bestanden, 0 fehlgeschlagen, 0 übersprungen**:
+  - `veg-model`: 19 / 19 bestanden (`BranchAndMergeModelTest` 3, `ModelPrimitivesTest` 6, `QueryAndRdfModelTest` 3, `SecurityAndInferenceModelTest` 3, `VersionedModelPrimitivesTest` 4)
+  - `veg-engine-memory`: 94 / 94 bestanden (`InMemoryStage1ContractTest` 6, `InMemoryStage2ContractTest` 5, `InMemoryStage3ContractTest` 23, `InMemoryStage4ContractTest` 22, `InMemoryStage5ContractTest` 22, `InMemoryStage6ContractTest` 10, `AccessControlProperties` 2 × `tries = 60`, `BranchMergeProperties` 1 × `tries = 25`, `GraphInvariantsProperties` 2 × `tries = 40`, `VersionedDatabaseProperties` 1 × `tries = 30`)
+  - `veg-benchmarks`: 2 / 2 bestanden
+  - `veg-cli`: 4 / 4 bestanden
+
+- **Messungen und Reproduzierbarkeit:**  
+  - `java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo`: Exit-Code 0 (`LUBM imported objects=42, Lehigh professors inferred via USING DERIVED memberOf=5 (top=Prof. Grace Hopper)`, `BSBM imported objects=32, top in-stock offer=Fiber Patch Analyzer F1 @ 189.95`, `T18 Turtle export triples=248, reifiedAnnotations=2, warnings=0`).
+  - `T18`-Re-Import sowohl von Turtle als auch von N-Triples rekonstruiert alle `6` Kanten-zu-Kanten-Provenienz-Annotationen (`hasWeight`, `hasConfidence`, `supportedBy`) sowie die explizit/abgeleitet-Trennung (`veg:assertionOrigin`, `M-12`).
+
+- **Was widerlegt / bestätigt wurde:**  
+  - **Bestätigt (`P-01` / `S-04` / `S-05`):** Weil `GraphQuery`, `GraphQueryDsl` und `RdfGraphExporter` ausschließlich gegen `GraphReader` arbeiten, erben alle Abfragen und Exporte ohne Sonderlogik den vollen `AuthorizedGraphReader`-Schutz (keine Lecks geheimer Attributwerte in `WHERE`, `SELECT` oder `.ttl`-Exporten).
+  - **Parser-Detail bei Turtle:** Dezimale Literale (`4.8`, `3.92`) erfordern im Turtle-Lexer die Unterscheidung zwischen Dezimalpunkt (folgt eine Ziffer) und Statement-Ende-Punkt (folgt Whitespace/Kommentar/EOF).
+
+- **Risiken und technische Schulden:**  
+  1. Komplexe Query-Pläne werten `JOIN`s aktuell naiv über die Engine-API aus; Leistungsvergleich und Optimierungsbedarf werden in Stufe 7 gemessen.
+  2. Alle Daten leben bisher rein im Hauptspeicher (`InMemoryVersionedDatabase`) — kompakte Storage-Formate (`Engine B`/`C`) und Disk-Persistenz folgen in den Stufen 7–8.
+
+- **Entscheidung (weiter / anpassen / verwerfen):**  
+  **Weiter** mit Stufe 7 (Storage-Experimente & Benchmarks: Engine A vs. B vs. C).
+
+- **Nächster kleinster sinnvoller Versuch (Stufe 7):**  
+  Konzeption und Benchmark-Vergleich einer kompakten In-Memory-Repräsentation (**Engine B**) sowie einer persistenten/strukturell geteilten Struktur (**Engine C**) gegen Baseline **Engine A** über `10k` / `100k` Entities und Commit-Historien, inklusive der bestehenden `Stage1`–`Stage6`-Contract-Testsuites (`P-01`).

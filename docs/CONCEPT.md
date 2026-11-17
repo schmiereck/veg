@@ -26,7 +26,8 @@
 
 Für die vollständigen Anforderungen (`M-01`–`M-14`, `V-01`–`V-17`, `S-01`–`S-09`, `P-01`–`P-10`), Hypothesen (`H1`–`H7`), Pflichtszenarien (`T01`–`T18`) und Benchmark-Workloads (`W1`–`W7`) gilt weiterhin [../doc/Versioned_Entity_Graph_RnD_Konzept.md](../doc/Versioned_Entity_Graph_RnD_Konzept.md).
 
-### Aktueller Implementierungsstand (nach Stufe 5)
+### Aktueller Implementierungsstand (nach Stufe 6)
 
 - **Stufen 0–4:** Bootstrap-Kern, Shared-Value-Semantik, Savepoints/Commit-DAG/Replay, Branches, selektives Staging und konfliktsicherer 3-Wege-Merge.
 - **Stufe 5:** Graph-gespeicherte ACLs mit **Default Deny** und **"Verbieten gewinnt"**, zyklussichere deklarative Rechtevererbung (`OUTGOING`/`INCOMING`/`BOTH`), Branch-Leserestriktionen (`S-05`), zeitreisensichere `authorizedAsOf`-Sichten (`T14`), Diagnosepfade (`AccessDecision`, `S-03`) sowie Query-Time-Inferenz (`HAS_INVERSE_PREDICATE`, `HAS_SUPER_PREDICATE`, `M-12`). Siehe [ADR-0006](adr/0006-access-control-deny-wins-and-semantic-inference.md).
+- **Stufe 6:** Storage-unabhängige Fluent-Query-API (`GraphQuery`) & deklarative Query-DSL (`GraphQueryDsl`), Turtle/N-Triples-Import (`RdfGraphImporter`) und -Export mit `rdf:Statement`-Provenienz & Warnungen (`RdfGraphExporter`, `T18`) sowie LUBM- und BSBM-Benchmark-Datensätze. Siehe [ADR-0007](adr/0007-query-dsl-and-rdf-turtle-interoperability.md).

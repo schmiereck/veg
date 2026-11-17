@@ -78,3 +78,10 @@ Um `InMemoryGraphEngine` dauerhaft schlank zu halten, kapseln dedizierte Paketkl
 - `PermissionEvaluator` — Zyklussichere BFS-Evaluation über Gruppen, Typen, Kantenendpunkte und `PropagationRule`s unter **Default Deny** und **"Verbieten gewinnt"** inkl. `AccessDecision`-Diagnosepfad.
 - `SemanticInferenceEngine` — Zyklussichere Query-Time-Auflösung expliziter vs. abgeleiteter Aussagen (`DerivedAssertion`).
 - `AuthorizedGraphReaderImpl` — Akteursspezifischer `AuthorizedGraphReader` mit stiller Filterung, `AccessDeniedException`, Branch-Restriktionen (`S-05`) und `HEAD`-Rückwärtsprüfung für `authorizedAsOf` (`T14`).
+
+## Stufe-6-Schicht (`veg-engine-api` & `veg-model`)
+
+Query- und RDF-Interoperabilität liegen bewusst in `veg-engine-api` über das abstrakte `GraphReader`-/`GraphSession`-Interface:
+
+- `GraphQuery` & `GraphQueryDsl` (`veg-engine-api`) — Storage-unabhängige Abfrage-, Join-, Filter-, Sortier- und Paging-Schicht über Live-Snapshots, historische `asOf`-Zustände und `AuthorizedGraphReader`.
+- `RdfGraphExporter` & `RdfGraphImporter` (`veg-engine-api`) — Eigenständiger Turtle-(`.ttl`) und N-Triples-(`.nt`) Export/Import mit Reifikation (`rdf:Statement`), Typ-Treue und expliziter Warnung bei unterdrückter Provenienz (`T18`).

@@ -17,6 +17,7 @@ import io.veg.engine.TypeMismatchException;
 import io.veg.engine.VersionedGraphDatabase;
 import io.veg.engine.memory.InMemoryGraphEngine;
 import io.veg.engine.memory.InMemoryVersionedDatabase;
+import io.veg.fixtures.RdfBenchmarkDatasets;
 import io.veg.model.AccessDecision;
 import io.veg.model.Actor;
 import io.veg.model.BootstrapIds;
@@ -30,6 +31,11 @@ import io.veg.model.MergePolicy;
 import io.veg.model.MergeResult;
 import io.veg.model.Permission;
 import io.veg.model.PropagationDirection;
+import io.veg.model.QueryRow;
+import io.veg.model.RdfExportOptions;
+import io.veg.model.RdfExportResult;
+import io.veg.model.RdfFormat;
+import io.veg.model.RdfImportResult;
 import io.veg.model.Reason;
 import io.veg.model.SavepointId;
 import io.veg.model.Value;
@@ -38,6 +44,8 @@ import io.veg.model.ValueType;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
@@ -68,6 +76,7 @@ public final class VegCliMain {
                 runDemo(out);
                 yield 0;
             }
+            case "import-rdf" -> runImportRdf(args, out, err);
             case "benchmark" -> runBenchmark(args, out, err);
             case "assertion-experiment" -> runAssertionExperiment(args, out, err);
             case "-h", "--help", "help" -> {
@@ -260,6 +269,132 @@ public final class VegCliMain {
         out.println("Doc explicit outgoing=" + db.currentSnapshot().findOutgoingEdges(doc).size()
                 + ", derived inverse count=" + derived.size()
                 + " (" + derived.getFirst().origin() + ")");
+
+        runStage6Demo(out);
+    }
+
+    private static void runStage6Demo(PrintStream out) {
+        out.println();
+        out.println("=== VEG Stage 6 Storage-Independent Query DSL & RDF (LUBM/BSBM) Demo ===");
+
+        VersionedGraphDatabase lubmDb = new InMemoryVersionedDatabase();
+        RdfImportResult lubmImport;
+        try (GraphTransaction tx = lubmDb.beginTransaction(Actor.user("admin"), Reason.of("Import LUBM Turtle"))) {
+            lubmImport = tx.importTurtle(RdfBenchmarkDatasets.lubmUniversityTurtle());
+            tx.commit();
+        }
+        List<QueryRow> lehighProfs = lubmDb.currentSnapshot().executeQuery("""
+                USING DERIVED
+                MATCH (p:Professor)
+                JOIN (p)-[memberOf]->(u:University)
+                WHERE u.name CONTAINS "Lehigh"
+                SELECT p.name, p.tenureYears
+                ORDER BY p.tenureYears DESC
+                """);
+        out.println("LUBM imported objects=" + lubmImport.importedObjectCount()
+                + ", Lehigh professors inferred via USING DERIVED memberOf=" + lehighProfs.size()
+                + " (top=" + lehighProfs.getFirst().stringValue("p.name").orElse("?") + ")");
+
+        VersionedGraphDatabase bsbmDb = new InMemoryVersionedDatabase();
+        RdfImportResult bsbmImport;
+        try (GraphTransaction tx = bsbmDb.beginTransaction(Actor.user("admin"), Reason.of("Import BSBM Turtle"))) {
+            bsbmImport = tx.importTurtle(RdfBenchmarkDatasets.bsbmEcommerceTurtle());
+            tx.commit();
+        }
+        List<QueryRow> bestOffers = bsbmDb.currentSnapshot().executeQuery("""
+                MATCH (o:Offer)
+                JOIN (o)-[product]->(p:Product)
+                WHERE o.inStock = true AND o.price <= 500.00
+                SELECT p.productName, o.price
+                ORDER BY o.price ASC
+                LIMIT 2
+                """);
+        RdfExportResult ttlExport = bsbmDb.currentSnapshot().exportTurtle();
+        out.println("BSBM imported objects=" + bsbmImport.importedObjectCount()
+                + ", top in-stock offer=" + bestOffers.getFirst().stringValue("p.productName").orElse("?")
+                + " @ " + bestOffers.getFirst().decimalValue("o.price").orElse(BigDecimal.ZERO));
+        out.println("T18 Turtle export triples=" + ttlExport.exportedTripleCount()
+                + ", reifiedAnnotations=" + ttlExport.reifiedAnnotationCount()
+                + ", warnings=" + ttlExport.warnings().size());
+    }
+
+    private static int runImportRdf(String[] args, PrintStream out, PrintStream err) throws IOException {
+        Path inputFile = null;
+        RdfFormat format = null;
+        String queryDsl = null;
+        Path exportFile = null;
+
+        for (int i = 1; i < args.length; i++) {
+            String flag = args[i];
+            if (i + 1 >= args.length) {
+                err.println("Missing value for option: " + flag);
+                return 1;
+            }
+            String val = args[++i];
+            switch (flag) {
+                case "--input" -> inputFile = Path.of(val);
+                case "--format" -> {
+                    if ("turtle".equalsIgnoreCase(val) || "ttl".equalsIgnoreCase(val)) {
+                        format = RdfFormat.TURTLE;
+                    } else if ("ntriples".equalsIgnoreCase(val) || "nt".equalsIgnoreCase(val)) {
+                        format = RdfFormat.N_TRIPLES;
+                    } else {
+                        err.println("Unsupported RDF format: " + val);
+                        return 1;
+                    }
+                }
+                case "--query" -> queryDsl = val;
+                case "--export" -> exportFile = Path.of(val);
+                default -> {
+                    err.println("Unknown option: " + flag);
+                    return 1;
+                }
+            }
+        }
+
+        if (inputFile == null) {
+            err.println("import-rdf requires --input <file>");
+            return 1;
+        }
+        if (format == null) {
+            String lower = inputFile.getFileName().toString().toLowerCase(Locale.ROOT);
+            format = lower.endsWith(".nt") ? RdfFormat.N_TRIPLES : RdfFormat.TURTLE;
+        }
+
+        String content = Files.readString(inputFile, StandardCharsets.UTF_8);
+        VersionedGraphDatabase db = new InMemoryVersionedDatabase();
+        RdfImportResult imported;
+        try (GraphTransaction tx = db.beginTransaction(Actor.user("cli"), Reason.of("CLI RDF import: " + inputFile.getFileName()))) {
+            imported = tx.importRdf(content, format);
+            tx.commit();
+        }
+
+        out.println("Imported RDF (" + format + "): objects=" + imported.importedObjectCount()
+                + ", literals=" + imported.importedLiteralCount()
+                + ", edges=" + imported.importedEdgeCount()
+                + ", reifiedAnnotations=" + imported.importedAnnotationCount());
+
+        GraphReader snap = db.currentSnapshot();
+        if (queryDsl != null) {
+            List<QueryRow> rows = snap.executeQuery(queryDsl);
+            out.println("Query rows=" + rows.size());
+            for (QueryRow row : rows) {
+                out.println("  " + row.projectedValues() + " " + row.bindings());
+            }
+        }
+
+        if (exportFile != null) {
+            RdfExportOptions opts = format == RdfFormat.N_TRIPLES
+                    ? RdfExportOptions.nTriplesDefault()
+                    : RdfExportOptions.turtleDefault();
+            RdfExportResult exported = snap.exportRdf(opts);
+            Files.writeString(exportFile, exported.content(), StandardCharsets.UTF_8);
+            out.println("Exported triples=" + exported.exportedTripleCount()
+                    + ", reified=" + exported.reifiedAnnotationCount()
+                    + ", warnings=" + exported.warnings().size()
+                    + " -> " + exportFile);
+        }
+        return 0;
     }
 
     private static int runBenchmark(String[] args, PrintStream out, PrintStream err) throws IOException {
@@ -414,6 +549,7 @@ public final class VegCliMain {
     private static void printUsage(PrintStream out) {
         out.println("Usage:");
         out.println("  veg-cli demo");
+        out.println("  veg-cli import-rdf --input <file.ttl|.nt> [--format turtle|ntriples] [--query \"<DSL>\"] [--export <out.ttl>]");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli assertion-experiment [--pairs N] [--seed S] [--densities 1,2,5] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
     }

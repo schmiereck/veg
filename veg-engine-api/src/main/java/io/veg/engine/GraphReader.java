@@ -8,6 +8,9 @@ import io.veg.model.EntityId;
 import io.veg.model.EntityNode;
 import io.veg.model.Permission;
 import io.veg.model.PredicateConstraints;
+import io.veg.model.QueryRow;
+import io.veg.model.RdfExportOptions;
+import io.veg.model.RdfExportResult;
 import io.veg.model.ValueMutability;
 
 import java.util.List;
@@ -69,4 +72,22 @@ public interface GraphReader {
     List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId);
 
     List<DerivedAssertion> findAllOutgoingAssertions(EntityId sourceId, EntityId predicateId);
+
+    // --- Stage 6: Storage-independent Query API/DSL & RDF export (S-04, S-06, T18) ---
+
+    default GraphQuery query() {
+        return GraphQuery.against(this);
+    }
+
+    default List<QueryRow> executeQuery(String dsl) {
+        return GraphQueryDsl.execute(this, dsl);
+    }
+
+    default RdfExportResult exportRdf(RdfExportOptions options) {
+        return RdfGraphExporter.export(this, options);
+    }
+
+    default RdfExportResult exportTurtle() {
+        return RdfGraphExporter.export(this, RdfExportOptions.turtleDefault());
+    }
 }

@@ -25,7 +25,43 @@ class VegCliMainTest {
 
         assertThat(code).isZero();
         String stdout = outBuf.toString(StandardCharsets.UTF_8);
-        assertThat(stdout).contains("T01:", "T02:", "T03:", "T04:", "VEG Stage 3", "replay matches live=true", "VEG Stage 4", "Merge succeeded=true", "VEG Stage 5", "HISTORICAL_HEAD_DENY");
+        assertThat(stdout).contains(
+                "T01:", "T02:", "T03:", "T04:",
+                "VEG Stage 3", "replay matches live=true",
+                "VEG Stage 4", "Merge succeeded=true",
+                "VEG Stage 5", "HISTORICAL_HEAD_DENY",
+                "VEG Stage 6", "LUBM imported objects=42", "BSBM imported objects=32", "reifiedAnnotations=2"
+        );
+    }
+
+    @Test
+    void importRdfCommandImportsQueriesAndExportsTurtle(@TempDir Path tempDir) throws Exception {
+        Path input = tempDir.resolve("sample.ttl");
+        Path output = tempDir.resolve("exported.ttl");
+        Files.writeString(input, """
+                @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+                @prefix ex:   <http://example.org/> .
+                ex:p1 a ex:Product ; ex:productName "Alpha" ; ex:price 49.90 .
+                [ a rdf:Statement ; rdf:subject ex:p1 ; rdf:predicate ex:productName ; rdf:object "Alpha" ; ex:hasConfidence 0.99 ] .
+                """, StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream outBuf = new ByteArrayOutputStream();
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+        int code = VegCliMain.execute(
+                new String[]{
+                        "import-rdf",
+                        "--input", input.toString(),
+                        "--query", "MATCH (p:Product) WHERE p.price <= 100.0 SELECT p.productName, p.price",
+                        "--export", output.toString()
+                },
+                new PrintStream(outBuf, true, StandardCharsets.UTF_8),
+                new PrintStream(errBuf, true, StandardCharsets.UTF_8));
+
+        assertThat(code).isZero();
+        String stdout = outBuf.toString(StandardCharsets.UTF_8);
+        assertThat(stdout).contains("Imported RDF (TURTLE): objects=1", "Query rows=1", "Alpha");
+        assertThat(Files.exists(output)).isTrue();
+        assertThat(Files.readString(output, StandardCharsets.UTF_8)).contains("rdf:Statement", "hasConfidence");
     }
 
     @Test

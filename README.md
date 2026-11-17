@@ -45,8 +45,14 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 # Paketieren des ausführbaren CLI-JARs
 .\mvnw.cmd -q package -DskipTests
 
-# Stage-1-Demonstration (Typen im Graph, strikte Typprüfung, Shared Values, Edge-zu-Edge-Provenienz)
+# Stage-1..6-Demonstration (Graph-Schema, Replay, Branches/Merge, ACLs, LUBM/BSBM Queries & RDF-Export)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo
+
+# Externe Turtle-/N-Triples-Datei importieren, abfragen und re-exportieren
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar import-rdf `
+  --input pfad/zur/datei.ttl `
+  --query "MATCH (p:Product) WHERE p.price <= 500.0 SELECT p.productName, p.price ORDER BY p.price ASC" `
+  --export out.ttl
 
 # Reproduzierbarer Baseline-Benchmark (10.000 Personen, Seed 42)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar benchmark `
@@ -69,7 +75,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [x] **Stufe 3:** Atomare Transaktionen, Savepoints, unveränderlicher Commit-DAG, `asOf`, `diff`, `revert` & Replay (`T05`–`T09`, `T15`, `ADR-0004`)
 - [x] **Stufe 4:** Branches mit struktureller Teilung (`T16`), selektives Staging (`V-06`) & struktureller 3-Wege-Merge (`T10`–`T12`, `V-13`, `ADR-0005`)
 - [x] **Stufe 5:** Versionsbewusste Berechtigungen ("Verbieten gewinnt", Entity/Relation/Attribut, `S-01`–`S-03`, `S-05`, `T13`–`T14`) & abgeleitete Aussagen (`M-12`, `ADR-0006`)
-- [ ] **Stufe 6:** Storage-unabhängige Query-API/DSL & RDF-Export (`T18`)
+- [x] **Stufe 6:** Storage-unabhängige Query-API/DSL (`S-04`), RDF/Turtle-Import & -Export (`T18`, `S-06`, `ADR-0007`) sowie LUBM/BSBM-Datensätze
 - [ ] **Stufe 7:** Storage-Experimente & Benchmarks (**Engine A** Map vs. **Engine B** Compact/FFM vs. **Engine C** Persistent Tree)
 - [ ] **Stufe 8:** Native Disk-Persistenz, WAL/Commit-Log, Snapshots & Crash-Recovery (`T17`)
 - [ ] **Stufe 10:** Reifung zur Mehrbenutzer-Datenbank (MVCC, Auto-Indizes, Bitemporalität)
@@ -88,6 +94,7 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar assertion-experiment `
 - [ADR-0004: Transaktions-Workspace, Commit-Envelope, Savepoints & Revert](docs/adr/0004-transaction-workspace-and-commit-log.md)
 - [ADR-0005: Branching, selektives Staging & struktureller Drei-Wege-Merge](docs/adr/0005-branching-selective-staging-and-three-way-merge.md)
 - [ADR-0006: Graph-Basierte Zugriffskontrolle ("Verbieten gewinnt") & Semantische Prädikat-Inferenz](docs/adr/0006-access-control-deny-wins-and-semantic-inference.md)
+- [ADR-0007: Storage-unabhängige Query-API/DSL & RDF/Turtle-Interoperabilität](docs/adr/0007-query-dsl-and-rdf-turtle-interoperability.md)
 - [Forschungslog](docs/RESEARCH_LOG.md)
 
 ## Lizenz
