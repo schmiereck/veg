@@ -1,0 +1,28 @@
+# Build outputs
+target/
+**/target/
+*.class
+*.jar
+*.war
+*.ear
+!/.mvn/wrapper/maven-wrapper.jar
+
+# IDEs and editors
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# OS and logs
+.DS_Store
+Thumbs.db
+*.log
+hs_err_pid*.log
+replay_pid*.log
+.jqwik-database
+**/.jqwik-database

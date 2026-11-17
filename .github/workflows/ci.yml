@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and run tests
+        run: ./mvnw clean verify
+
+      - name: Run CLI Stage 1 demo and smoke benchmark
+        run: |
+          java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar demo
+          java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar benchmark --entities 1000 --seed 42 --warmup 1 --iterations 2

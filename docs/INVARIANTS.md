@@ -1,0 +1,14 @@
+# Systeminvarianten (VEG)
+
+Alle Storage-Backends (`veg-engine-memory` sowie spätere Engines B und C) müssen diese Invarianten zu jedem Zeitpunkt einhalten. Die Verifikation erfolgt über `Stage1ContractTestSuite` und die Property-Based Tests (`GraphInvariantsProperties`).
+
+| ID | Invariante | Beschreibung & Prüfkriterium |
+|---|---|---|
+| **I-01** | **Stabile, eindeutige Identität** | Jede `EntityId` ist positiv (`> 0`), wird pro Graph-Instanz höchstens einmal vergeben (ab `1000` streng monoton) und bleibt über Mutationen stabil. |
+| **I-02** | **First-Class Edges** | Zu jeder aktiven `Edge(id, s, p, t)` existiert exakt ein korrespondierender `EntityNode(id, META_EDGE_TYPE, EDGE, empty)`. Dadurch ist jede Relation als Quelle oder Ziel weiterer Relationen adressierbar (`M-02`). |
+| **I-03** | **First-Class Attribute Values** | Jeder Attributwert besitzt eine eigene `EntityId` und einen `EntityNode(kind = VALUE)` mit zwingend vorhandenem `Value`-Payload (`M-03`). Andere `EntityKind`s dürfen keinen Payload tragen. |
+| **I-04** | **Atomare Typ- und Constraint-Integrität** | Scheiternde Schema-, Skalartyp-, Domain- oder Range-Prüfungen werfen eine typisierte `VegException` und lassen `entityCount()`, `edgeCount()` sowie alle sichtbaren Graphdaten exakt unverändert (`M-04`, `V-03`). |
+| **I-05** | **Selbstbeschreibendes Schema im Graph** | Mit Ausnahme des Bootstrap-Kerns (`1..999`) liegen alle fachlichen Typen, Werttypen, Prädikate, Namen (`HAS_NAME`), Skalartypen (`HAS_SCALAR_TYPE`) sowie `HAS_DOMAIN`/`HAS_RANGE` als reguläre Knoten und Kanten im Graph (`M-05`). |
+| **I-06** | **Referenzielle Kanten-Integrität** | Jede aktive `Edge` referenziert existierende `sourceId`, `predicateId` (vom Typ `META_PREDICATE_TYPE`) und `targetId`. Ein `disconnect(edgeId)` wird mit `ReferentialIntegrityException` abgelehnt, solange andere aktive Edges auf `edgeId` verweisen. |
+| **I-07** | **Keine implizite Typkonvertierung** | Ein `Value` wird nur akzeptiert, wenn sein `ValueType` exakt dem über `HAS_SCALAR_TYPE` am Ziel-Werttyp hinterlegten Skalartyp entspricht. |
+| **I-08** | **Unveränderlicher Bootstrap-Kern** | Bootstrap-Entitäten und strukturelle Schema-Kanten (`HAS_NAME`, `HAS_SCALAR_TYPE`, `HAS_DOMAIN`, `HAS_RANGE`) können nicht durch reguläre `disconnect`-Aufrufe entfernt werden. |
