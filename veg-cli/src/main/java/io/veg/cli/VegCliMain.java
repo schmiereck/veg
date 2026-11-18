@@ -1,5 +1,6 @@
 package io.veg.cli;
 
+import io.veg.cli.desktop.VegDesktopApp;
 import io.veg.benchmarks.AssertionModelComparisonRunner;
 import io.veg.benchmarks.AssertionModelComparisonRunner.ExperimentConfig;
 import io.veg.benchmarks.AssertionModelComparisonRunner.ExperimentReport;
@@ -100,6 +101,7 @@ public final class VegCliMain {
             case "db" -> VegWorkspaceCommands.runDb(args, out, err);
             case "mcp" -> VegWorkspaceCommands.runMcp(args, System.in, out, err);
             case "studio" -> VegWorkspaceCommands.runStudio(args, out, err);
+            case "desktop" -> VegDesktopApp.runCli(args, out, err);
             case "-h", "--help", "help" -> {
                 printUsage(out);
                 yield 0;
@@ -798,6 +800,7 @@ public final class VegCliMain {
         out.println("  veg-cli db --db <dir> <schema|datasheet|query|inspect|commits|set-attr|create-object|connect|disconnect|export-patch|apply-patch> [...]");
         out.println("  veg-cli mcp [--db data/project-kb]");
         out.println("  veg-cli studio [--db data/project-kb] [--port 8080]");
+        out.println("  veg-cli desktop [--db data/project-kb] [--port 8080] [--no-browser]");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli assertion-experiment [--pairs N] [--seed S] [--densities 1,2,5] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");
         out.println("  veg-cli storage-experiment [--entities N] [--commits C] [--branches B] [--seed S] [--warmup W] [--queries Q] [--output results.csv] [--json results.json]");

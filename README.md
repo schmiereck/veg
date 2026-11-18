@@ -20,7 +20,7 @@ VEG verfolgt einen strikt experimentellen Stufenplan (**Stufe 0 bis 10**, siehe 
 | [`veg-engine-persistent`](veg-engine-persistent) | Disk-Persistenz auf Engine C: `CRC32C`-WAL, atomare Refs, GZIP-Checkpoints, Kaltarchiv & Crash-Recovery |
 | [`veg-test-fixtures`](veg-test-fixtures) | Backend-agnostische Contract-Tests (`T01`–`T18`) und deterministischer Graph-Generator (`P-02`) |
 | [`veg-benchmarks`](veg-benchmarks) | Reproduzierbarer Benchmark-Harness mit CSV-/JSON-Export & JVM-Telemetrie |
-| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `import-rdf`, `import-project-docs`, `db`, `mcp`, `studio`, Benchmarks) & **VEG Access Studio** |
+| [`veg-cli`](veg-cli) | Ausführbare CLI (`demo`, `import-rdf`, `import-project-docs`, `db`, `mcp`, `studio`, `desktop`, Benchmarks), **VEG Access Studio** & `VEG-Studio.exe` (`jpackage`) |
 | [`data/project-kb`](data/project-kb) & [`.agents`](.agents) | Persistenter Projekt-Wissensgraph (`I-01`–`I-28`, `ADR-0001`–`0010`, Stufen, Module) sowie MCP-Plugin & Agent-Skill |
 | [`docs`](docs) | Konzept, Glossar, Invarianten, Architektur, ADRs, Laborbuch (`RESEARCH_LOG.md`) & Experimente |
 
@@ -94,6 +94,13 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar mcp --db data/project-kb
 
 # 4. VEG Access Studio (grafische Browser-Oberfläche unter http://127.0.0.1:8080/studio/index.html)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar studio --db data/project-kb --port 8080
+
+# 5. Windows Desktop App (lokaler Server-Manager + automatischer Start von VEG Access Studio)
+java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar desktop --db data/project-kb --port 8080
+
+# Natives Windows-Paket (VEG-Studio.exe inkl. eingebetteter JRE & project-kb) per JDK-25 jpackage bauen:
+.\mvnw.cmd package -Pwindows-exe -DskipTests
+.\veg-cli\target\dist\VEG-Studio\VEG-Studio.exe
 ```
 
 ---
@@ -171,6 +178,20 @@ Coding-Agents greifen über **MCP (JSON-RPC 2.0 über Stdio)** oder **`veg-cli d
 - **Beziehungen & Schema:** Kartenansicht aller Typen und Relationen samt Formularen zum Anlegen neuer `ObjectType`s, `ValueType`s und `Predicate`s.
 - **Abfrage-Assistent:** Dropdown-Builder zur Erzeugung von `GraphQueryDsl`-Abfragen inkl. Presets und klickbarer Ergebnistabelle.
 - **Historie, globale `asOf`-Zeitreise & `.vegpatch`-Bridge:** Commit-Liste mit Ein-Klick-Zeitreise, Commit-Diff-Ansicht sowie Export und 3-Wege-Merge von `.vegpatch`-Patches direkt im Browser.
+
+### 5. Windows Desktop App (`VEG-Studio.exe` – Server-Manager & App-Launcher)
+
+Für einen niedrigen Einstieg ohne Kommandozeile bündelt das Maven-Profil `-Pwindows-exe` eine eigenständige Windows-Desktop-Anwendung (**Variante A**: nativer Server-Manager + Browser/App-Fenster für **VEG Access Studio**):
+
+- **Server-Manager & System Tray ([VegDesktopApp](veg-cli/src/main/java/io/veg/cli/desktop/VegDesktopApp.java) / [VegServerController](veg-cli/src/main/java/io/veg/cli/desktop/VegServerController.java)):** Natives Windows-Swing-Fenster mit System-Tray-Icon (`pic/logo-veg-smal.jpg`), Live-Statuskarte (aktives DB-Verzeichnis, Studio-URL, Branch/`HEAD`, Entity-/Edge-/Commit-Zähler, `IdGenerationStrategy`), Live-Transaktions-/Server-Log und automatischem Öffnen von **VEG Access Studio** als Edge-/Chrome-App-Fenster (`--app=...`) bzw. im Standard-Browser.
+- **Menüleiste zur Server- & DB-Verwaltung:**
+  - **Datenbank:** `DB-Verzeichnis öffnen / wechseln...`, `Neue leere Datenbank anlegen...`, `Checkpoint jetzt schreiben`, `Kaltarchivierung bis Commit...`, `Backup erstellen...`, `Backup wiederherstellen...`, `Beenden`
+  - **Server:** `Server starten`, `Server stoppen`, `Server neu starten`, `Port ändern...`, `ID-Vergabestrategie` (`SEQUENTIAL`, `UUID_V7`, `UUID_V4`)
+  - **Import / Export & Git-Patch:** `Projekt-Dokumentation (.md) in DB importieren...`, `RDF-Datei (.ttl / .nt) importieren...`, `Aktuellen Graph als RDF (.ttl / .nt) exportieren...`, `Git-Patch (.vegpatch) 3-Wege-Merge...`, `Git-Patch (.vegpatch) direkt auf HEAD anwenden...`, `Commit-Diff als .vegpatch exportieren...`
+  - **Browser & Ansicht:** `VEG Access Studio im App-Fenster öffnen`, `VEG Access Studio im Standard-Browser öffnen`, `Studio-URL kopieren`, `Status aktualisieren`
+- **Maven-Build für die `.exe` (erfordert JDK 25 `jpackage` / `jlink` unter Windows):**
+  - Build: `.\mvnw.cmd package -Pwindows-exe -DskipTests` *(oder vollständige Verifikation inkl. Tests via `.\mvnw.cmd clean verify -Pwindows-exe`)*
+  - Ausgabe: Portables App-Image unter `veg-cli/target/dist/VEG-Studio/VEG-Studio.exe` inkl. privater Runtime und mitgelieferter Beispiel-Datenbank `data/project-kb`.
 
 ---
 

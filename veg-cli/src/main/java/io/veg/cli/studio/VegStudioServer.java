@@ -81,6 +81,8 @@ public final class VegStudioServer implements AutoCloseable {
                 handleStatic(ex, "/studio/styles.css", "text/css; charset=utf-8");
             } else if ("/studio/app.js".equals(path)) {
                 handleStatic(ex, "/studio/app.js", "application/javascript; charset=utf-8");
+            } else if ("/studio/logo.png".equals(path)) {
+                handleStatic(ex, "/studio/logo.png", "image/png");
             } else {
                 sendJson(ex, 404, Map.of("error", "NotFound", "message", "Resource not found: " + path));
             }

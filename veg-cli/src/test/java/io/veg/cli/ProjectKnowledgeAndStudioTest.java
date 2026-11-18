@@ -1,14 +1,22 @@
 package io.veg.cli;
 
+import io.veg.cli.desktop.VegServerController;
+import io.veg.cli.desktop.VegServerController.ServerStatus;
+import io.veg.cli.desktop.WindowsIconGenerator;
 import io.veg.cli.json.JsonCodec;
 import io.veg.cli.kb.ProjectKnowledgeImporter;
 import io.veg.cli.kb.ProjectKnowledgeImporter.ImportReport;
 import io.veg.cli.mcp.VegMcpStdioServer;
 import io.veg.cli.studio.VegStudioServer;
+import io.veg.engine.VegPatchService.PatchApplyMode;
+import io.veg.engine.VegPatchService.PatchResult;
 import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
+import io.veg.model.IdGenerationStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -472,6 +480,105 @@ class ProjectKnowledgeAndStudioTest {
             assertThat(patchRes.get("merged")).isEqualTo(true);
             assertThat(db.currentSnapshot().executeQuery("MATCH (i:Invariant) WHERE i.id = \"I-95\" SELECT i.title"))
                     .hasSize(1);
+
+            HttpResponse<byte[]> logoResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/studio/logo.png")).GET().build(),
+                    HttpResponse.BodyHandlers.ofByteArray()
+            );
+            assertThat(logoResp.statusCode()).isEqualTo(200);
+            assertThat(logoResp.headers().firstValue("Content-Type")).contains("image/png");
+            assertThat(logoResp.body().length).isGreaterThan(100);
+            assertThat(logoResp.body()[0]).isEqualTo((byte) 0x89);
+            assertThat(logoResp.body()[1]).isEqualTo((byte) 'P');
+        }
+    }
+
+    @Test
+    void desktopServerControllerAndIconGeneratorWorkCleanly(@TempDir Path tempDir) throws Exception {
+        Path repoRoot = resolveRepoRoot();
+        Path logoJpg = repoRoot.resolve("pic/logo-veg-smal.jpg");
+        BufferedImage rendered = WindowsIconGenerator.renderSquareIcon(logoJpg, 256);
+        assertThat(rendered.getWidth()).isEqualTo(256);
+        assertThat(rendered.getHeight()).isEqualTo(256);
+
+        Path pngOut = tempDir.resolve("logo.png");
+        Path icoOut = tempDir.resolve("VEG-Studio.ico");
+        WindowsIconGenerator.writePng(rendered, pngOut);
+        WindowsIconGenerator.writeIco(rendered, icoOut);
+
+        byte[] pngBytes = Files.readAllBytes(pngOut);
+        assertThat(pngBytes[0]).isEqualTo((byte) 0x89);
+        assertThat(pngBytes[1]).isEqualTo((byte) 'P');
+        assertThat(ImageIO.read(pngOut.toFile()).getWidth()).isEqualTo(256);
+
+        byte[] icoBytes = Files.readAllBytes(icoOut);
+        assertThat(icoBytes.length).isGreaterThan(22);
+        // ICO header: reserved=0x0000, type=0x0001, count=0x0001
+        assertThat(icoBytes[0]).isEqualTo((byte) 0x00);
+        assertThat(icoBytes[1]).isEqualTo((byte) 0x00);
+        assertThat(icoBytes[2]).isEqualTo((byte) 0x01);
+        assertThat(icoBytes[3]).isEqualTo((byte) 0x00);
+        assertThat(icoBytes[4]).isEqualTo((byte) 0x01);
+        assertThat(icoBytes[5]).isEqualTo((byte) 0x00);
+
+        Path dbMain = tempDir.resolve("db-main");
+        Path dbTarget = tempDir.resolve("db-target");
+        Path backupDir = tempDir.resolve("backup");
+        Path restoredDir = tempDir.resolve("db-restored");
+        Path patchFile = tempDir.resolve("kb.vegpatch");
+
+        try (VegServerController controller = new VegServerController(dbMain, 0)) {
+            assertThat(controller.status().running()).isFalse();
+            controller.startServer();
+
+            ServerStatus initialStatus = controller.status();
+            assertThat(initialStatus.running()).isTrue();
+            assertThat(initialStatus.activePort()).isGreaterThan(0);
+            assertThat(initialStatus.studioUrl()).startsWith("http://127.0.0.1:");
+            String baseCommit = initialStatus.headCommitId();
+            long baselineEntities = initialStatus.entityCount();
+
+            controller.setIdStrategy(IdGenerationStrategy.UUID_V7);
+            assertThat(controller.status().idStrategy()).isEqualTo(IdGenerationStrategy.UUID_V7);
+
+            ImportReport report = controller.importProjectDocs(repoRoot, false);
+            assertThat(report.invariants()).isGreaterThan(20);
+
+            ServerStatus afterImport = controller.status();
+            assertThat(afterImport.entityCount()).isGreaterThan(50);
+            assertThat(afterImport.commitCount()).isGreaterThanOrEqualTo(2);
+
+            String patchText = controller.exportVegPatch(baseCommit, afterImport.headCommitId(), patchFile);
+            assertThat(patchText).contains("VEG-PATCH v1");
+            assertThat(Files.isRegularFile(patchFile)).isTrue();
+
+            controller.createCheckpoint();
+            controller.createBackup(backupDir);
+
+            controller.createFreshDatabase(dbTarget);
+            assertThat(controller.status().running()).isTrue();
+            assertThat(controller.status().entityCount()).isEqualTo(baselineEntities);
+
+            PatchResult applied = controller.applyVegPatch(patchFile, PatchApplyMode.MERGE);
+            assertThat(applied.merged()).isTrue();
+            assertThat(controller.status().entityCount()).isEqualTo(afterImport.entityCount());
+
+            controller.restoreBackup(backupDir, restoredDir);
+            assertThat(controller.status().running()).isTrue();
+            assertThat(controller.status().dbDir()).isEqualTo(restoredDir.toAbsolutePath().normalize());
+            assertThat(controller.status().entityCount()).isEqualTo(afterImport.entityCount());
+
+            HttpClient client = HttpClient.newHttpClient();
+            HttpResponse<String> uiResp = client.send(
+                    HttpRequest.newBuilder(URI.create(controller.status().studioUrl())).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(uiResp.statusCode()).isEqualTo(200);
+            assertThat(uiResp.body()).contains("/studio/logo.png");
+
+            controller.stopServer();
+            assertThat(controller.status().running()).isFalse();
+            assertThat(controller.recentLogs()).isNotEmpty();
         }
     }
 
