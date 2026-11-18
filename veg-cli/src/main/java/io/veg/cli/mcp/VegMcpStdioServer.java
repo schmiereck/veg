@@ -3,8 +3,10 @@ package io.veg.cli.mcp;
 import io.veg.cli.json.JsonCodec;
 import io.veg.cli.kb.GraphTabularService;
 import io.veg.cli.kb.GraphTabularService.SnapshotContext;
+import io.veg.cli.studio.VegRemoteServerClient;
 import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.VersionedGraphDatabase;
+import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
 import io.veg.model.IdGenerationStrategy;
@@ -17,13 +19,16 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.function.BiFunction;
 
 /**
  * Model Context Protocol (MCP) JSON-RPC 2.0 stdio server exposing VEG database schema,
@@ -35,9 +40,73 @@ public final class VegMcpStdioServer {
     private static final String PROTOCOL_VERSION = "2024-11-05";
 
     private final VersionedGraphDatabase db;
+    private final Object mutationLock;
+    private final BiFunction<String, PrintStream, String> customLineHandler;
 
     public VegMcpStdioServer(VersionedGraphDatabase db) {
+        this(db, new Object());
+    }
+
+    public VegMcpStdioServer(VersionedGraphDatabase db, Object mutationLock) {
         this.db = Objects.requireNonNull(db, "db must not be null");
+        this.mutationLock = Objects.requireNonNull(mutationLock, "mutationLock must not be null");
+        this.customLineHandler = null;
+    }
+
+    private VegMcpStdioServer(BiFunction<String, PrintStream, String> customLineHandler) {
+        this.db = null;
+        this.mutationLock = new Object();
+        this.customLineHandler = Objects.requireNonNull(customLineHandler, "customLineHandler must not be null");
+    }
+
+    /**
+     * Builds an MCP stdio handler that routes requests to a running VEG Studio server
+     * when active (either via {@code explicitServerUrl}, {@code dbDir/server.active}, or the
+     * default port), and transparently falls back to opening {@code dbDir} locally when offline.
+     */
+    public static VegMcpStdioServer forWorkspace(Path dbDir, String explicitServerUrl, boolean forceLocal) {
+        return new VegMcpStdioServer((rawJson, err) -> {
+            Object id = null;
+            try {
+                Map<String, Object> req = JsonCodec.parseObject(rawJson);
+                id = req.get("id");
+                String method = JsonCodec.requireString(req, "method");
+                Map<String, Object> params = JsonCodec.asObject(req.get("params"));
+
+                if (method.startsWith("notifications/")) {
+                    return null;
+                }
+
+                Optional<String> serverUrl = VegRemoteServerClient.resolveRunningServer(dbDir, explicitServerUrl, forceLocal);
+                if (serverUrl.isPresent()) {
+                    return VegRemoteServerClient.forwardMcpJsonRpc(serverUrl.get(), rawJson);
+                }
+
+                return switch (method) {
+                    case "initialize" -> JsonCodec.toJson(rpcResult(id, buildInitializeResult(params)));
+                    case "ping" -> JsonCodec.toJson(rpcResult(id, Map.of()));
+                    case "tools/list" -> JsonCodec.toJson(rpcResult(id, Map.of("tools", buildToolDefinitions())));
+                    case "tools/call" -> {
+                        if (dbDir == null) {
+                            throw new IllegalStateException("No --db directory configured and no running VEG server found.");
+                        }
+                        try (PersistentDiskVersionedDatabase diskDb = PersistentDiskVersionedDatabase.open(dbDir)) {
+                            yield new VegMcpStdioServer(diskDb).handleJsonRpcLine(rawJson, err);
+                        }
+                    }
+                    default -> id != null
+                            ? JsonCodec.toJson(rpcError(id, -32601, "Unsupported MCP method: " + method))
+                            : null;
+                };
+            } catch (Exception e) {
+                if (err != null) {
+                    err.println("[veg-mcp] Error handling request: " + e.getMessage());
+                }
+                return id != null
+                        ? JsonCodec.toJson(rpcError(id, -32603, e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()))
+                        : null;
+            }
+        });
     }
 
     public void runLoop(InputStream in, PrintStream out, PrintStream err) throws IOException {
@@ -74,7 +143,7 @@ public final class VegMcpStdioServer {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            String responseJson = handleJsonRpcLine(trimmed, err);
+            String responseJson = dispatchJsonRpcLine(trimmed, err);
             if (responseJson != null) {
                 synchronized (out) {
                     out.println(responseJson);
@@ -82,6 +151,13 @@ public final class VegMcpStdioServer {
                 }
             }
         }
+    }
+
+    public String dispatchJsonRpcLine(String rawJson, PrintStream err) {
+        if (customLineHandler != null) {
+            return customLineHandler.apply(rawJson, err);
+        }
+        return handleJsonRpcLine(rawJson, err);
     }
 
     public String handleJsonRpcLine(String rawJson, PrintStream err) {
@@ -98,9 +174,9 @@ public final class VegMcpStdioServer {
             }
 
             Object result = switch (method) {
-                case "initialize" -> handleInitialize(params);
+                case "initialize" -> buildInitializeResult(params);
                 case "ping" -> Map.of();
-                case "tools/list" -> Map.of("tools", toolDefinitions());
+                case "tools/list" -> Map.of("tools", buildToolDefinitions());
                 case "tools/call" -> handleToolCall(params);
                 default -> throw new MethodNotFoundException("Unsupported MCP method: " + method);
             };
@@ -115,7 +191,7 @@ public final class VegMcpStdioServer {
         }
     }
 
-    private Map<String, Object> handleInitialize(Map<String, Object> params) {
+    private static Map<String, Object> buildInitializeResult(Map<String, Object> params) {
         String requested = JsonCodec.asOptionalString(params, "protocolVersion").orElse(PROTOCOL_VERSION);
         Map<String, Object> serverInfo = Map.of(
                 "name", "veg-mcp",
@@ -195,69 +271,71 @@ public final class VegMcpStdioServer {
     }
 
     private Map<String, Object> executeMutate(Map<String, Object> args) {
-        String action = JsonCodec.requireString(args, "action").toLowerCase(Locale.ROOT);
-        String branch = JsonCodec.asOptionalString(args, "branch").orElse(db.currentBranch());
-        String actorId = JsonCodec.asOptionalString(args, "actor").orElse("coding-agent");
-        String reasonText = JsonCodec.asOptionalString(args, "reason").orElse("MCP agent mutation: " + action);
-        Actor actor = Actor.of(actorId, actorId);
-        Reason reason = Reason.of(reasonText);
+        synchronized (mutationLock) {
+            String action = JsonCodec.requireString(args, "action").toLowerCase(Locale.ROOT);
+            String branch = JsonCodec.asOptionalString(args, "branch").orElse(db.currentBranch());
+            String actorId = JsonCodec.asOptionalString(args, "actor").orElse("coding-agent");
+            String reasonText = JsonCodec.asOptionalString(args, "reason").orElse("MCP agent mutation: " + action);
+            Actor actor = Actor.of(actorId, actorId);
+            Reason reason = Reason.of(reasonText);
 
-        return switch (action) {
-            case "create_object" -> {
-                String typeName = JsonCodec.requireString(args, "typeName");
-                Map<String, Object> rawAttrs = JsonCodec.asObject(args.get("attributes"));
-                Map<String, String> attrs = new LinkedHashMap<>();
-                for (Map.Entry<String, Object> e : rawAttrs.entrySet()) {
-                    if (e.getValue() != null) {
-                        attrs.put(e.getKey(), String.valueOf(e.getValue()));
+            return switch (action) {
+                case "create_object" -> {
+                    String typeName = JsonCodec.requireString(args, "typeName");
+                    Map<String, Object> rawAttrs = JsonCodec.asObject(args.get("attributes"));
+                    Map<String, String> attrs = new LinkedHashMap<>();
+                    for (Map.Entry<String, Object> e : rawAttrs.entrySet()) {
+                        if (e.getValue() != null) {
+                            attrs.put(e.getKey(), String.valueOf(e.getValue()));
+                        }
                     }
+                    IdGenerationStrategy strategy = JsonCodec.asOptionalString(args, "idStrategy")
+                            .filter(s -> !s.isBlank())
+                            .map(s -> IdGenerationStrategy.valueOf(s.trim().toUpperCase(Locale.ROOT).replace('-', '_')))
+                            .orElse(null);
+                    yield GraphTabularService.createObject(db, branch, actor, reason, typeName, attrs, strategy);
                 }
-                IdGenerationStrategy strategy = JsonCodec.asOptionalString(args, "idStrategy")
-                        .filter(s -> !s.isBlank())
-                        .map(s -> IdGenerationStrategy.valueOf(s.trim().toUpperCase(Locale.ROOT).replace('-', '_')))
-                        .orElse(null);
-                yield GraphTabularService.createObject(db, branch, actor, reason, typeName, attrs, strategy);
-            }
-            case "set_attribute" -> {
-                EntityId entityId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "entityId"));
-                String predicate = JsonCodec.requireString(args, "predicate");
-                boolean clear = JsonCodec.asBoolean(args, "clear", false);
-                String value = JsonCodec.asOptionalString(args, "value").orElse(null);
-                yield GraphTabularService.setAttributeCell(db, branch, actor, reason, entityId, predicate, value, clear);
-            }
-            case "connect" -> {
-                EntityId sourceId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "sourceId"));
-                String predicate = JsonCodec.requireString(args, "predicate");
-                EntityId targetId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "targetId"));
-                yield GraphTabularService.connectEntities(db, branch, actor, reason, sourceId, predicate, targetId);
-            }
-            case "disconnect" -> {
-                EntityId edgeId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "edgeId"));
-                yield GraphTabularService.disconnectEdge(db, branch, actor, reason, edgeId);
-            }
-            case "define_object_type" -> {
-                String name = JsonCodec.requireString(args, "name");
-                yield GraphTabularService.defineObjectType(db, branch, actor, reason, name);
-            }
-            case "define_value_type" -> {
-                String name = JsonCodec.requireString(args, "name");
-                ValueType scalar = ValueType.valueOf(JsonCodec.requireString(args, "scalarType").toUpperCase(Locale.ROOT));
-                boolean unique = JsonCodec.asBoolean(args, "uniqueValues", false);
-                yield GraphTabularService.defineValueType(db, branch, actor, reason, name, scalar, unique);
-            }
-            case "define_predicate" -> {
-                String name = JsonCodec.requireString(args, "name");
-                String domain = JsonCodec.requireString(args, "domain");
-                String range = JsonCodec.requireString(args, "range");
-                OptionalInt maxOut = JsonCodec.asOptionalLong(args, "maxOutgoing")
-                        .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
-                OptionalInt maxIn = JsonCodec.asOptionalLong(args, "maxIncoming")
-                        .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
-                boolean uniqueTriple = JsonCodec.asBoolean(args, "uniqueTriple", true);
-                yield GraphTabularService.definePredicate(db, branch, actor, reason, name, domain, range, maxOut, maxIn, uniqueTriple);
-            }
-            default -> throw new IllegalArgumentException("Unsupported mutate action: " + action);
-        };
+                case "set_attribute" -> {
+                    EntityId entityId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "entityId"));
+                    String predicate = JsonCodec.requireString(args, "predicate");
+                    boolean clear = JsonCodec.asBoolean(args, "clear", false);
+                    String value = JsonCodec.asOptionalString(args, "value").orElse(null);
+                    yield GraphTabularService.setAttributeCell(db, branch, actor, reason, entityId, predicate, value, clear);
+                }
+                case "connect" -> {
+                    EntityId sourceId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "sourceId"));
+                    String predicate = JsonCodec.requireString(args, "predicate");
+                    EntityId targetId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "targetId"));
+                    yield GraphTabularService.connectEntities(db, branch, actor, reason, sourceId, predicate, targetId);
+                }
+                case "disconnect" -> {
+                    EntityId edgeId = GraphTabularService.parseEntityId(JsonCodec.requireString(args, "edgeId"));
+                    yield GraphTabularService.disconnectEdge(db, branch, actor, reason, edgeId);
+                }
+                case "define_object_type" -> {
+                    String name = JsonCodec.requireString(args, "name");
+                    yield GraphTabularService.defineObjectType(db, branch, actor, reason, name);
+                }
+                case "define_value_type" -> {
+                    String name = JsonCodec.requireString(args, "name");
+                    ValueType scalar = ValueType.valueOf(JsonCodec.requireString(args, "scalarType").toUpperCase(Locale.ROOT));
+                    boolean unique = JsonCodec.asBoolean(args, "uniqueValues", false);
+                    yield GraphTabularService.defineValueType(db, branch, actor, reason, name, scalar, unique);
+                }
+                case "define_predicate" -> {
+                    String name = JsonCodec.requireString(args, "name");
+                    String domain = JsonCodec.requireString(args, "domain");
+                    String range = JsonCodec.requireString(args, "range");
+                    OptionalInt maxOut = JsonCodec.asOptionalLong(args, "maxOutgoing")
+                            .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
+                    OptionalInt maxIn = JsonCodec.asOptionalLong(args, "maxIncoming")
+                            .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
+                    boolean uniqueTriple = JsonCodec.asBoolean(args, "uniqueTriple", true);
+                    yield GraphTabularService.definePredicate(db, branch, actor, reason, name, domain, range, maxOut, maxIn, uniqueTriple);
+                }
+                default -> throw new IllegalArgumentException("Unsupported mutate action: " + action);
+            };
+        }
     }
 
     private SnapshotContext ctxFromArgs(Map<String, Object> args) {
@@ -267,7 +345,7 @@ public final class VegMcpStdioServer {
         return GraphTabularService.resolveContext(db, branch, asOf, validAt);
     }
 
-    private List<Map<String, Object>> toolDefinitions() {
+    private static List<Map<String, Object>> buildToolDefinitions() {
         List<Map<String, Object>> tools = new ArrayList<>();
 
         tools.add(toolSpec("veg_schema",
@@ -370,15 +448,17 @@ public final class VegMcpStdioServer {
                     JsonCodec.requireString(args, "toCommit")
             );
             case "apply", "merge" -> {
-                PatchApplyMode mode = "apply".equals(action) ? PatchApplyMode.APPLY : PatchApplyMode.MERGE;
-                String branch = JsonCodec.asOptionalString(args, "branch").orElse(db.currentBranch());
-                Actor actor = JsonCodec.asOptionalString(args, "actor").filter(s -> !s.isBlank())
-                        .map(Actor::user).orElse(null);
-                Reason reason = JsonCodec.asOptionalString(args, "reason").filter(s -> !s.isBlank())
-                        .map(Reason::of).orElse(null);
-                yield GraphTabularService.applyOrMergePatch(
-                        db, JsonCodec.requireString(args, "patchText"), branch, mode, actor, reason
-                );
+                synchronized (mutationLock) {
+                    PatchApplyMode mode = "apply".equals(action) ? PatchApplyMode.APPLY : PatchApplyMode.MERGE;
+                    String branch = JsonCodec.asOptionalString(args, "branch").orElse(db.currentBranch());
+                    Actor actor = JsonCodec.asOptionalString(args, "actor").filter(s -> !s.isBlank())
+                            .map(Actor::user).orElse(null);
+                    Reason reason = JsonCodec.asOptionalString(args, "reason").filter(s -> !s.isBlank())
+                            .map(Reason::of).orElse(null);
+                    yield GraphTabularService.applyOrMergePatch(
+                            db, JsonCodec.requireString(args, "patchText"), branch, mode, actor, reason
+                    );
+                }
             }
             default -> throw new IllegalArgumentException("Unsupported veg_patch action: " + action);
         };

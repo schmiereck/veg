@@ -6,6 +6,7 @@ import io.veg.cli.kb.GraphTabularService.SnapshotContext;
 import io.veg.cli.kb.ProjectKnowledgeImporter;
 import io.veg.cli.kb.ProjectKnowledgeImporter.ImportReport;
 import io.veg.cli.mcp.VegMcpStdioServer;
+import io.veg.cli.studio.VegRemoteServerClient;
 import io.veg.cli.studio.VegStudioServer;
 import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
@@ -25,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Stream;
 
@@ -117,6 +119,8 @@ final class VegWorkspaceCommands {
         Path patchOutputFile = null;
         PatchApplyMode patchMode = PatchApplyMode.MERGE;
         IdGenerationStrategy idStrategy = null;
+        String serverUrl = null;
+        boolean forceLocal = false;
         Map<String, String> createAttrs = new LinkedHashMap<>();
 
         for (int i = 1; i < args.length; i++) {
@@ -133,6 +137,10 @@ final class VegWorkspaceCommands {
                 clear = true;
                 continue;
             }
+            if ("--local".equals(token)) {
+                forceLocal = true;
+                continue;
+            }
             if (i + 1 >= args.length) {
                 err.println("Missing value for option: " + token);
                 return 1;
@@ -140,6 +148,7 @@ final class VegWorkspaceCommands {
             String val = args[++i];
             switch (token) {
                 case "--db" -> dbDir = Path.of(val);
+                case "--server" -> serverUrl = val;
                 case "--type" -> typeName = val;
                 case "--dsl" -> dsl = val;
                 case "--search" -> search = val;
@@ -183,139 +192,196 @@ final class VegWorkspaceCommands {
             err.println("Expected db subcommand: schema | datasheet | query | inspect | commits | set-attr | create-object | connect | disconnect | export-patch | apply-patch");
             return 1;
         }
-        if (!Files.exists(dbDir)) {
-            err.println("Database directory does not exist: " + dbDir);
-            return 1;
-        }
 
-        try (PersistentDiskVersionedDatabase db = PersistentDiskVersionedDatabase.open(dbDir)) {
-            if (idStrategy != null) {
-                db.setIdGenerationStrategy(idStrategy);
+        try {
+            Optional<String> remoteOrigin = VegRemoteServerClient.resolveRunningServer(dbDir, serverUrl, forceLocal);
+            if (remoteOrigin.isPresent()) {
+                boolean hasExplicitReason = reasonText != null && !reasonText.isBlank();
+                String resolvedReason = hasExplicitReason ? reasonText : "CLI db " + subcommand;
+                Object payload = VegRemoteServerClient.executeRemoteDbSubcommand(
+                        remoteOrigin.get(),
+                        subcommand,
+                        branch,
+                        asOf,
+                        validAt,
+                        typeName,
+                        search,
+                        sortBy,
+                        sortDir,
+                        limit,
+                        offset,
+                        dsl,
+                        entityIdStr,
+                        sourceIdStr,
+                        targetIdStr,
+                        edgeIdStr,
+                        predicate,
+                        value,
+                        clear,
+                        actorId,
+                        resolvedReason,
+                        hasExplicitReason,
+                        idStrategy,
+                        createAttrs,
+                        fromCommitStr,
+                        toCommitStr,
+                        patchInputFile,
+                        patchOutputFile,
+                        patchMode
+                );
+                emitDbPayload(subcommand, payload, jsonOutput, out);
+                return 0;
             }
-            SnapshotContext ctx = GraphTabularService.resolveContext(db, branch, asOf, validAt);
-            Actor actor = Actor.of(actorId, actorId);
-            String defaultReason = "CLI db " + subcommand;
-            Reason reason = Reason.of(reasonText != null && !reasonText.isBlank() ? reasonText : defaultReason);
 
-            Object payload = switch (subcommand) {
-                case "schema" -> GraphTabularService.overview(db, ctx);
-                case "datasheet" -> {
-                    if (typeName == null) {
-                        throw new IllegalArgumentException("Missing required option --type");
-                    }
-                    Map<String, String> filters = new LinkedHashMap<>();
-                    if (search != null && !search.isBlank()) {
-                        filters.put("_q", search);
-                    }
-                    yield GraphTabularService.datasheet(ctx, typeName, filters, sortBy, sortDir, limit, offset);
+            if (!Files.exists(dbDir)) {
+                err.println("Database directory does not exist: " + dbDir);
+                return 1;
+            }
+
+            try (PersistentDiskVersionedDatabase db = PersistentDiskVersionedDatabase.open(dbDir)) {
+                if (idStrategy != null) {
+                    db.setIdGenerationStrategy(idStrategy);
                 }
-                case "query" -> {
-                    if (dsl == null) {
-                        throw new IllegalArgumentException("Missing required option --dsl");
-                    }
-                    yield GraphTabularService.executeDslQuery(ctx, dsl);
-                }
-                case "inspect" -> {
-                    if (entityIdStr == null) {
-                        throw new IllegalArgumentException("Missing required option --id");
-                    }
-                    yield GraphTabularService.entityDetail(db, ctx, GraphTabularService.parseEntityId(entityIdStr));
-                }
-                case "commits" -> GraphTabularService.commitsHistory(db);
-                case "set-attr" -> {
-                    if (entityIdStr == null || predicate == null) {
-                        throw new IllegalArgumentException("Missing required options --id and --pred");
-                    }
-                    yield GraphTabularService.setAttributeCell(
-                            db, ctx.branchName(), actor, reason,
-                            GraphTabularService.parseEntityId(entityIdStr), predicate, value, clear
-                    );
-                }
-                case "create-object" -> {
-                    if (typeName == null) {
-                        throw new IllegalArgumentException("Missing required option --type");
-                    }
-                    yield GraphTabularService.createObject(
-                            db, ctx.branchName(), actor, reason, typeName, createAttrs, idStrategy
-                    );
-                }
-                case "connect" -> {
-                    if (sourceIdStr == null || predicate == null || targetIdStr == null) {
-                        throw new IllegalArgumentException("Missing required options --source, --pred, --target");
-                    }
-                    yield GraphTabularService.connectEntities(
-                            db, ctx.branchName(), actor, reason,
-                            GraphTabularService.parseEntityId(sourceIdStr),
-                            predicate,
-                            GraphTabularService.parseEntityId(targetIdStr)
-                    );
-                }
-                case "disconnect" -> {
-                    if (edgeIdStr == null) {
-                        throw new IllegalArgumentException("Missing required option --edge");
-                    }
-                    yield GraphTabularService.disconnectEdge(
-                            db, ctx.branchName(), actor, reason,
-                            GraphTabularService.parseEntityId(edgeIdStr)
-                    );
-                }
-                case "export-patch" -> {
-                    if (fromCommitStr == null || toCommitStr == null) {
-                        throw new IllegalArgumentException("Missing required options --from and --to");
-                    }
-                    Map<String, Object> exported = GraphTabularService.exportPatch(db, fromCommitStr, toCommitStr);
-                    if (patchOutputFile != null) {
-                        if (patchOutputFile.toAbsolutePath().getParent() != null) {
-                            Files.createDirectories(patchOutputFile.toAbsolutePath().getParent());
+                SnapshotContext ctx = GraphTabularService.resolveContext(db, branch, asOf, validAt);
+                Actor actor = Actor.of(actorId, actorId);
+                String defaultReason = "CLI db " + subcommand;
+                Reason reason = Reason.of(reasonText != null && !reasonText.isBlank() ? reasonText : defaultReason);
+
+                Object payload = switch (subcommand) {
+                    case "schema" -> GraphTabularService.overview(db, ctx);
+                    case "datasheet" -> {
+                        if (typeName == null) {
+                            throw new IllegalArgumentException("Missing required option --type");
                         }
-                        Files.writeString(patchOutputFile, String.valueOf(exported.get("patchText")), StandardCharsets.UTF_8);
+                        Map<String, String> filters = new LinkedHashMap<>();
+                        if (search != null && !search.isBlank()) {
+                            filters.put("_q", search);
+                        }
+                        yield GraphTabularService.datasheet(ctx, typeName, filters, sortBy, sortDir, limit, offset);
                     }
-                    yield exported;
-                }
-                case "apply-patch" -> {
-                    if (patchInputFile == null) {
-                        throw new IllegalArgumentException("Missing required option --input");
+                    case "query" -> {
+                        if (dsl == null) {
+                            throw new IllegalArgumentException("Missing required option --dsl");
+                        }
+                        yield GraphTabularService.executeDslQuery(ctx, dsl);
                     }
-                    String patchText = Files.readString(patchInputFile, StandardCharsets.UTF_8);
-                    Actor patchActor = actorId.equals("cli-agent") && reasonText == null ? null : actor;
-                    Reason patchReason = reasonText == null ? null : reason;
-                    yield GraphTabularService.applyOrMergePatch(
-                            db, patchText, ctx.branchName(), patchMode, patchActor, patchReason
-                    );
-                }
-                default -> throw new IllegalArgumentException("Unknown db subcommand: " + subcommand);
-            };
+                    case "inspect" -> {
+                        if (entityIdStr == null) {
+                            throw new IllegalArgumentException("Missing required option --id");
+                        }
+                        yield GraphTabularService.entityDetail(db, ctx, GraphTabularService.parseEntityId(entityIdStr));
+                    }
+                    case "commits" -> GraphTabularService.commitsHistory(db);
+                    case "set-attr" -> {
+                        if (entityIdStr == null || predicate == null) {
+                            throw new IllegalArgumentException("Missing required options --id and --pred");
+                        }
+                        yield GraphTabularService.setAttributeCell(
+                                db, ctx.branchName(), actor, reason,
+                                GraphTabularService.parseEntityId(entityIdStr), predicate, value, clear
+                        );
+                    }
+                    case "create-object" -> {
+                        if (typeName == null) {
+                            throw new IllegalArgumentException("Missing required option --type");
+                        }
+                        yield GraphTabularService.createObject(
+                                db, ctx.branchName(), actor, reason, typeName, createAttrs, idStrategy
+                        );
+                    }
+                    case "connect" -> {
+                        if (sourceIdStr == null || predicate == null || targetIdStr == null) {
+                            throw new IllegalArgumentException("Missing required options --source, --pred, --target");
+                        }
+                        yield GraphTabularService.connectEntities(
+                                db, ctx.branchName(), actor, reason,
+                                GraphTabularService.parseEntityId(sourceIdStr),
+                                predicate,
+                                GraphTabularService.parseEntityId(targetIdStr)
+                        );
+                    }
+                    case "disconnect" -> {
+                        if (edgeIdStr == null) {
+                            throw new IllegalArgumentException("Missing required option --edge");
+                        }
+                        yield GraphTabularService.disconnectEdge(
+                                db, ctx.branchName(), actor, reason,
+                                GraphTabularService.parseEntityId(edgeIdStr)
+                        );
+                    }
+                    case "export-patch" -> {
+                        if (fromCommitStr == null || toCommitStr == null) {
+                            throw new IllegalArgumentException("Missing required options --from and --to");
+                        }
+                        Map<String, Object> exported = GraphTabularService.exportPatch(db, fromCommitStr, toCommitStr);
+                        if (patchOutputFile != null) {
+                            if (patchOutputFile.toAbsolutePath().getParent() != null) {
+                                Files.createDirectories(patchOutputFile.toAbsolutePath().getParent());
+                            }
+                            Files.writeString(patchOutputFile, String.valueOf(exported.get("patchText")), StandardCharsets.UTF_8);
+                        }
+                        yield exported;
+                    }
+                    case "apply-patch" -> {
+                        if (patchInputFile == null) {
+                            throw new IllegalArgumentException("Missing required option --input");
+                        }
+                        String patchText = Files.readString(patchInputFile, StandardCharsets.UTF_8);
+                        Actor patchActor = actorId.equals("cli-agent") && reasonText == null ? null : actor;
+                        Reason patchReason = reasonText == null ? null : reason;
+                        yield GraphTabularService.applyOrMergePatch(
+                                db, patchText, ctx.branchName(), patchMode, patchActor, patchReason
+                        );
+                    }
+                    default -> throw new IllegalArgumentException("Unknown db subcommand: " + subcommand);
+                };
 
-            if ("export-patch".equals(subcommand) && !jsonOutput) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> m = (Map<String, Object>) payload;
-                out.print(m.get("patchText"));
-            } else if (jsonOutput) {
-                out.println(JsonCodec.toJson(payload));
-            } else {
-                printReadableDbOutput(subcommand, payload, out);
+                emitDbPayload(subcommand, payload, jsonOutput, out);
+                return 0;
             }
-            return 0;
         } catch (RuntimeException e) {
             err.println("db error: " + e.getMessage());
             return 1;
         }
     }
 
+    private static void emitDbPayload(String subcommand, Object payload, boolean jsonOutput, PrintStream out) {
+        if ("export-patch".equals(subcommand) && !jsonOutput) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = (Map<String, Object>) payload;
+            out.print(m.get("patchText"));
+        } else if (jsonOutput) {
+            out.println(JsonCodec.toJson(payload));
+        } else {
+            printReadableDbOutput(subcommand, payload, out);
+        }
+    }
+
     static int runMcp(String[] args, InputStream in, PrintStream out, PrintStream err) throws IOException {
         Path dbDir = Path.of("data/project-kb");
+        String serverUrl = null;
+        boolean forceLocal = false;
         for (int i = 1; i < args.length; i++) {
             String flag = args[i];
-            if ("--db".equals(flag) && i + 1 < args.length) {
-                dbDir = Path.of(args[++i]);
-            } else {
+            if ("--local".equals(flag)) {
+                forceLocal = true;
+                continue;
+            }
+            if (i + 1 >= args.length) {
                 err.println("Unknown or incomplete option: " + flag);
                 return 1;
             }
+            String val = args[++i];
+            switch (flag) {
+                case "--db" -> dbDir = Path.of(val);
+                case "--server" -> serverUrl = val;
+                default -> {
+                    err.println("Unknown or incomplete option: " + flag);
+                    return 1;
+                }
+            }
         }
-        try (PersistentDiskVersionedDatabase db = PersistentDiskVersionedDatabase.open(dbDir)) {
-            new VegMcpStdioServer(db).runLoop(in, out, err);
-        }
+        VegMcpStdioServer.forWorkspace(dbDir, serverUrl, forceLocal).runLoop(in, out, err);
         return 0;
     }
 

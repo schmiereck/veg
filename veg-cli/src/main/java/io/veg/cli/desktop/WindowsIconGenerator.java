@@ -13,6 +13,7 @@ import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.DosFileAttributeView;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -71,13 +72,14 @@ public final class WindowsIconGenerator {
     }
 
     private static void copyBundledProjectKb() throws IOException {
-        Path srcKb = resolveOptionalPath("data/project-kb", "../data/project-kb");
-        if (srcKb == null || !Files.isDirectory(srcKb)) {
-            return;
-        }
         Path targetBase = Files.isDirectory(Path.of("target")) ? Path.of("target") : Path.of("veg-cli/target");
         Path distApp = targetBase.resolve("dist/VEG-Studio");
         if (!Files.isDirectory(distApp)) {
+            return;
+        }
+        clearReadOnlyRecursively(distApp);
+        Path srcKb = resolveOptionalPath("data/project-kb", "../data/project-kb");
+        if (srcKb == null || !Files.isDirectory(srcKb)) {
             return;
         }
         Path destKb = distApp.resolve("data/project-kb");
@@ -164,10 +166,26 @@ public final class WindowsIconGenerator {
         return Files.exists(p2) ? p2 : null;
     }
 
+    private static void clearReadOnlyRecursively(Path root) throws IOException {
+        if (!Files.exists(root)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(root)) {
+            for (Path p : walk.toList()) {
+                p.toFile().setWritable(true);
+                DosFileAttributeView dos = Files.getFileAttributeView(p, DosFileAttributeView.class);
+                if (dos != null) {
+                    dos.setReadOnly(false);
+                }
+            }
+        }
+    }
+
     private static void deleteRecursivelyIfExists(Path dir) throws IOException {
         if (!Files.exists(dir)) {
             return;
         }
+        clearReadOnlyRecursively(dir);
         try (Stream<Path> walk = Files.walk(dir)) {
             List<Path> paths = walk.sorted(Comparator.reverseOrder()).toList();
             for (Path p : paths) {

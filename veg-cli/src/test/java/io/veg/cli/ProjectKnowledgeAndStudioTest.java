@@ -7,6 +7,7 @@ import io.veg.cli.json.JsonCodec;
 import io.veg.cli.kb.ProjectKnowledgeImporter;
 import io.veg.cli.kb.ProjectKnowledgeImporter.ImportReport;
 import io.veg.cli.mcp.VegMcpStdioServer;
+import io.veg.cli.studio.VegRemoteServerClient;
 import io.veg.cli.studio.VegStudioServer;
 import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.VegPatchService.PatchResult;
@@ -580,6 +581,125 @@ class ProjectKnowledgeAndStudioTest {
             assertThat(controller.status().running()).isFalse();
             assertThat(controller.recentLogs()).isNotEmpty();
         }
+    }
+
+    @Test
+    void cliAndMcpConnectAutomaticallyToRunningServer(@TempDir Path tempDir) throws Exception {
+        Path repoRoot = resolveRepoRoot();
+        Path liveDb = tempDir.resolve("live-db");
+        Path activeMarker = liveDb.resolve(VegRemoteServerClient.ACTIVE_SERVER_FILE);
+
+        try (VegServerController controller = new VegServerController(liveDb, 0)) {
+            controller.startServer();
+            assertThat(Files.isRegularFile(activeMarker)).isTrue();
+
+            ImportReport imported = controller.importProjectDocs(repoRoot, false);
+            assertThat(imported.invariants()).isGreaterThan(20);
+            long entitiesBeforeRemote = controller.status().entityCount();
+            int commitsBeforeRemote = controller.status().commitCount();
+
+            // 1. CLI `db` commands transparently route through the running HTTP server (`server.active`)
+            ByteArrayOutputStream cliOutBuf = new ByteArrayOutputStream();
+            ByteArrayOutputStream cliErrBuf = new ByteArrayOutputStream();
+            PrintStream cliOut = new PrintStream(cliOutBuf, true, StandardCharsets.UTF_8);
+            PrintStream cliErr = new PrintStream(cliErrBuf, true, StandardCharsets.UTF_8);
+
+            int createExit = VegCliMain.execute(
+                    new String[]{
+                            "db", "--db", liveDb.toString(), "create-object",
+                            "--type", "Invariant",
+                            "--attr", "id=I-91",
+                            "--attr", "title=CLI Remote Live Commit",
+                            "--id-strategy", "uuid-v7",
+                            "--actor", "cli-live",
+                            "--reason", "CLI through running Studio server",
+                            "--json"
+                    },
+                    cliOut, cliErr
+            );
+            assertThat(createExit).isZero();
+            assertThat(cliErrBuf.toString(StandardCharsets.UTF_8)).isEmpty();
+            Map<String, Object> cliCreated = JsonCodec.parseObject(cliOutBuf.toString(StandardCharsets.UTF_8));
+            assertThat(cliCreated.get("commitId")).isEqualTo("c6");
+            assertThat(String.valueOf(cliCreated.get("entityId"))).hasSize(36).contains("-");
+
+            // Live server immediately reflects the CLI commit without restart
+            assertThat(controller.status().headCommitId()).isEqualTo("c6");
+            assertThat(controller.status().commitCount()).isEqualTo(commitsBeforeRemote + 1);
+            assertThat(controller.status().entityCount()).isGreaterThan(entitiesBeforeRemote);
+            assertThat(controller.recentLogs()).anyMatch(line -> line.contains("cli-live"));
+
+            // 2. MCP stdio handler automatically routes to the same live server (`POST /api/mcp`)
+            VegMcpStdioServer liveMcp = VegMcpStdioServer.forWorkspace(liveDb, null, false);
+            String mcpRequests = String.join("\n",
+                    JsonCodec.toJson(Map.of("jsonrpc", "2.0", "id", 1, "method", "initialize", "params", Map.of())),
+                    JsonCodec.toJson(Map.of(
+                            "jsonrpc", "2.0", "id", 2, "method", "tools/call",
+                            "params", Map.of("name", "veg_mutate", "arguments", Map.of(
+                                    "action", "create_object",
+                                    "typeName", "Invariant",
+                                    "attributes", Map.of("id", "I-92", "title", "MCP Remote Live Commit"),
+                                    "actor", "mcp-live",
+                                    "reason", "MCP through running Studio server"
+                            ))
+                    )),
+                    JsonCodec.toJson(Map.of(
+                            "jsonrpc", "2.0", "id", 3, "method", "tools/call",
+                            "params", Map.of("name", "veg_query", "arguments", Map.of(
+                                    "dsl", "MATCH (i:Invariant) WHERE i.id = \"I-91\" SELECT i.title"
+                            ))
+                    ))
+            );
+            ByteArrayOutputStream mcpOutBuf = new ByteArrayOutputStream();
+            ByteArrayOutputStream mcpErrBuf = new ByteArrayOutputStream();
+            liveMcp.processStream(
+                    new BufferedReader(new StringReader(mcpRequests)),
+                    new PrintStream(mcpOutBuf, true, StandardCharsets.UTF_8),
+                    new PrintStream(mcpErrBuf, true, StandardCharsets.UTF_8)
+            );
+            assertThat(mcpErrBuf.toString(StandardCharsets.UTF_8)).isEmpty();
+
+            List<String> mcpLines = mcpOutBuf.toString(StandardCharsets.UTF_8).lines()
+                    .filter(l -> !l.isBlank())
+                    .toList();
+            assertThat(mcpLines).hasSize(3);
+            Map<String, Object> mcpMutatePayload = parseToolTextPayload(mcpLines.get(1));
+            assertThat(mcpMutatePayload.get("commitId")).isEqualTo("c7");
+            Map<String, Object> mcpQueryPayload = parseToolTextPayload(mcpLines.get(2));
+            assertThat(((Number) mcpQueryPayload.get("rowCount")).intValue()).isEqualTo(1);
+
+            assertThat(controller.status().headCommitId()).isEqualTo("c7");
+            assertThat(controller.recentLogs()).anyMatch(line -> line.contains("MCP-Tool veg_mutate"));
+
+            // Verify Studio HTTP /api/overview reflects the live head directly
+            HttpClient client = HttpClient.newHttpClient();
+            HttpResponse<String> ovResp = client.send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + controller.status().activePort() + "/api/overview"))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(ovResp.statusCode()).isEqualTo(200);
+            assertThat(JsonCodec.parseObject(ovResp.body()).get("headCommitId")).isEqualTo("c7");
+
+            // Stopping the server removes `server.active`
+            controller.stopServer();
+            assertThat(Files.exists(activeMarker)).isFalse();
+        }
+
+        // 3. After server stop, CLI and MCP transparently fall back to local disk and see c6 + c7
+        ByteArrayOutputStream offlineOut = new ByteArrayOutputStream();
+        int offlineQueryExit = VegCliMain.execute(
+                new String[]{
+                        "db", "--db", liveDb.toString(), "query",
+                        "--dsl", "MATCH (i:Invariant) WHERE i.id = \"I-92\" SELECT i.title",
+                        "--json"
+                },
+                new PrintStream(offlineOut, true, StandardCharsets.UTF_8),
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8)
+        );
+        assertThat(offlineQueryExit).isZero();
+        Map<String, Object> offlineQuery = JsonCodec.parseObject(offlineOut.toString(StandardCharsets.UTF_8));
+        assertThat(((Number) offlineQuery.get("rowCount")).intValue()).isEqualTo(1);
     }
 
     private static Map<String, Object> parseToolTextPayload(String rpcResponseLine) {

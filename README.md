@@ -89,8 +89,11 @@ java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb crea
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb export-patch --from c4 --to c5 --output pr.vegpatch
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --db data/project-kb apply-patch --input pr.vegpatch --mode merge
 
-# 3. MCP-Stdio-Server für Coding-Agents
+# 3. MCP-Stdio-Server für Coding-Agents (verbindet sich automatisch mit einem laufenden VEG-Studio-Server, falls aktiv)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar mcp --db data/project-kb
+# Optional explizit gegen einen laufenden Server oder strikt lokal:
+# java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar db --server http://127.0.0.1:8080 schema
+# java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar mcp --db data/project-kb --local
 
 # 4. VEG Access Studio (grafische Browser-Oberfläche unter http://127.0.0.1:8080/studio/index.html)
 java -jar veg-cli/target/veg-cli-0.1.0-SNAPSHOT.jar studio --db data/project-kb --port 8080
@@ -184,6 +187,7 @@ Coding-Agents greifen über **MCP (JSON-RPC 2.0 über Stdio)** oder **`veg-cli d
 Für einen niedrigen Einstieg ohne Kommandozeile bündelt das Maven-Profil `-Pwindows-exe` eine eigenständige Windows-Desktop-Anwendung (**Variante A**: nativer Server-Manager + Browser/App-Fenster für **VEG Access Studio**):
 
 - **Server-Manager & System Tray ([VegDesktopApp](veg-cli/src/main/java/io/veg/cli/desktop/VegDesktopApp.java) / [VegServerController](veg-cli/src/main/java/io/veg/cli/desktop/VegServerController.java)):** Natives Windows-Swing-Fenster mit System-Tray-Icon (`pic/logo-veg-smal.jpg`), Live-Statuskarte (aktives DB-Verzeichnis, Studio-URL, Branch/`HEAD`, Entity-/Edge-/Commit-Zähler, `IdGenerationStrategy`), Live-Transaktions-/Server-Log und automatischem Öffnen von **VEG Access Studio** als Edge-/Chrome-App-Fenster (`--app=...`) bzw. im Standard-Browser.
+- **Gemeinsamer Zugriff für Browser, CLI & Coding-Agents (MCP):** Läuft `VEG-Studio.exe` (oder `veg-cli studio`), leiten `veg-cli db` und `veg-cli mcp` Abfragen und Mutationen automatisch per HTTP (`/api/server-info`, `/api/mcp`, `/api/*`, entdeckt über `<dbDir>/server.active` bzw. Default-Port `8080`, steuerbar über `--server <url>` oder `--local`) an den laufenden Server weiter — Änderungen erscheinen sofort im Server-Manager-Log und in **VEG Access Studio**.
 - **Menüleiste zur Server- & DB-Verwaltung:**
   - **Datenbank:** `DB-Verzeichnis öffnen / wechseln...`, `Neue leere Datenbank anlegen...`, `Checkpoint jetzt schreiben`, `Kaltarchivierung bis Commit...`, `Backup erstellen...`, `Backup wiederherstellen...`, `Beenden`
   - **Server:** `Server starten`, `Server stoppen`, `Server neu starten`, `Port ändern...`, `ID-Vergabestrategie` (`SEQUENTIAL`, `UUID_V7`, `UUID_V4`)

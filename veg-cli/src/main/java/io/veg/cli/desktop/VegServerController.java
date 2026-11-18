@@ -136,7 +136,11 @@ public final class VegServerController implements AutoCloseable {
         PersistentDiskVersionedDatabase opened = PersistentDiskVersionedDatabase.open(dbDir);
         try {
             opened.setIdGenerationStrategy(idStrategy);
-            VegStudioServer http = new VegStudioServer(opened, configuredPort);
+            VegStudioServer http = new VegStudioServer(opened, configuredPort, dbDir);
+            http.setActivityListener(msg -> {
+                log(msg);
+                notifyStatus();
+            });
             http.start();
             this.db = opened;
             this.server = http;

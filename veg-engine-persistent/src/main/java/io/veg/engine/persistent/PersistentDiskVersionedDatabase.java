@@ -884,7 +884,8 @@ public final class PersistentDiskVersionedDatabase implements VersionedGraphData
         try (Stream<Path> walk = Files.walk(sourceDir)) {
             for (Path source : walk.toList()) {
                 Path relative = sourceDir.relativize(source);
-                if (relative.toString().endsWith(".tmp")) {
+                String relStr = relative.toString();
+                if (relStr.endsWith(".tmp") || relStr.equals("server.active")) {
                     continue;
                 }
                 Path target = targetDir.resolve(relative);

@@ -797,8 +797,8 @@ public final class VegCliMain {
         out.println("  veg-cli demo");
         out.println("  veg-cli import-rdf --input <file.ttl|.nt> [--format turtle|ntriples] [--query \"<DSL>\"] [--export <out.ttl>]");
         out.println("  veg-cli import-project-docs [--db data/project-kb] [--docs-root .] [--clean]");
-        out.println("  veg-cli db --db <dir> <schema|datasheet|query|inspect|commits|set-attr|create-object|connect|disconnect|export-patch|apply-patch> [...]");
-        out.println("  veg-cli mcp [--db data/project-kb]");
+        out.println("  veg-cli db --db <dir> [--server <url>] [--local] <schema|datasheet|query|inspect|commits|set-attr|create-object|connect|disconnect|export-patch|apply-patch> [...]");
+        out.println("  veg-cli mcp [--db data/project-kb] [--server <url>] [--local]");
         out.println("  veg-cli studio [--db data/project-kb] [--port 8080]");
         out.println("  veg-cli desktop [--db data/project-kb] [--port 8080] [--no-browser]");
         out.println("  veg-cli benchmark [--entities N] [--seed S] [--shared-ratio R] [--provenance-ratio P] [--warmup W] [--iterations I] [--queries Q] [--output results.csv] [--json results.json]");

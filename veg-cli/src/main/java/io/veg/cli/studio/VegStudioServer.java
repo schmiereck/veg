@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer;
 import io.veg.cli.json.JsonCodec;
 import io.veg.cli.kb.GraphTabularService;
 import io.veg.cli.kb.GraphTabularService.SnapshotContext;
+import io.veg.cli.mcp.VegMcpStdioServer;
 import io.veg.engine.BranchNotFoundException;
 import io.veg.engine.CommitNotFoundException;
 import io.veg.engine.QuerySyntaxException;
@@ -13,8 +14,10 @@ import io.veg.engine.SchemaViolationException;
 import io.veg.engine.VegException;
 import io.veg.engine.VegPatchService.PatchApplyMode;
 import io.veg.engine.VersionedGraphDatabase;
+import io.veg.engine.persistent.PersistentDiskVersionedDatabase;
 import io.veg.model.Actor;
 import io.veg.model.EntityId;
+import io.veg.model.IdGenerationStrategy;
 import io.veg.model.Reason;
 import io.veg.model.ValueType;
 
@@ -25,6 +28,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -32,6 +37,7 @@ import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 /**
  * Embedded HTTP + JSON server powering VEG Access Studio: an MS-Access-inspired
@@ -41,32 +47,71 @@ import java.util.concurrent.Executors;
 public final class VegStudioServer implements AutoCloseable {
 
     private final VersionedGraphDatabase db;
+    private final Path dbDir;
     private final HttpServer server;
     private final ExecutorService executor;
     private final Object mutationLock = new Object();
+    private final VegMcpStdioServer mcpServer;
+    private volatile Consumer<String> activityListener;
 
     public VegStudioServer(VersionedGraphDatabase db, int port) throws IOException {
+        this(db, port, (db instanceof PersistentDiskVersionedDatabase diskDb) ? diskDb.dataDirectory() : null);
+    }
+
+    public VegStudioServer(VersionedGraphDatabase db, int port, Path dbDir) throws IOException {
         this.db = Objects.requireNonNull(db, "db must not be null");
+        this.dbDir = dbDir != null ? dbDir.toAbsolutePath().normalize() : null;
+        this.mcpServer = new VegMcpStdioServer(this.db, this.mutationLock);
         this.server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
         this.executor = Executors.newVirtualThreadPerTaskExecutor();
         this.server.setExecutor(this.executor);
         registerRoutes();
     }
 
+    public void setActivityListener(Consumer<String> listener) {
+        this.activityListener = listener;
+    }
+
+    private void notifyActivity(String message) {
+        Consumer<String> listener = this.activityListener;
+        if (listener != null && message != null && !message.isBlank()) {
+            listener.accept(message);
+        }
+    }
+
     public void start() {
         server.start();
+        if (dbDir != null) {
+            try {
+                Files.createDirectories(dbDir);
+                Files.writeString(dbDir.resolve(VegRemoteServerClient.ACTIVE_SERVER_FILE),
+                        originUrl() + System.lineSeparator(), StandardCharsets.UTF_8);
+            } catch (IOException ignored) {
+                // Best-effort server discovery file; continue serving HTTP requests.
+            }
+        }
     }
 
     public int port() {
         return server.getAddress().getPort();
     }
 
+    public String originUrl() {
+        return "http://127.0.0.1:" + port();
+    }
+
     public String baseUrl() {
-        return "http://127.0.0.1:" + port() + "/studio/index.html";
+        return originUrl() + "/studio/index.html";
     }
 
     @Override
     public void close() {
+        if (dbDir != null) {
+            try {
+                Files.deleteIfExists(dbDir.resolve(VegRemoteServerClient.ACTIVE_SERVER_FILE));
+            } catch (IOException ignored) {
+            }
+        }
         server.stop(0);
         executor.shutdownNow();
     }
@@ -85,6 +130,53 @@ public final class VegStudioServer implements AutoCloseable {
                 handleStatic(ex, "/studio/logo.png", "image/png");
             } else {
                 sendJson(ex, 404, Map.of("error", "NotFound", "message", "Resource not found: " + path));
+            }
+        });
+        server.createContext("/api/server-info", ex -> handleGetJson(ex, q -> {
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("status", "running");
+            info.put("port", port());
+            info.put("originUrl", originUrl());
+            info.put("studioUrl", baseUrl());
+            info.put("dbDir", dbDir != null ? dbDir.toString() : "");
+            info.put("currentBranch", db.currentBranch());
+            info.put("headCommitId", db.headCommitId().toString());
+            return info;
+        }));
+        server.createContext("/api/mcp", ex -> {
+            if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
+                sendJson(ex, 405, Map.of("error", "MethodNotAllowed", "message", "Expected POST"));
+                return;
+            }
+            try {
+                String raw = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String responseJson = mcpServer.handleJsonRpcLine(raw, null);
+                try {
+                    Map<String, Object> req = JsonCodec.parseObject(raw);
+                    if ("tools/call".equals(req.get("method"))) {
+                        Map<String, Object> params = JsonCodec.asObject(req.get("params"));
+                        String toolName = String.valueOf(params.getOrDefault("name", ""));
+                        if ("veg_mutate".equals(toolName) || "veg_patch".equals(toolName)) {
+                            notifyActivity("MCP-Tool " + toolName + " ausgeführt (HEAD: " + db.headCommitId() + ")");
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+                if (responseJson == null) {
+                    ex.sendResponseHeaders(204, -1);
+                    ex.close();
+                    return;
+                }
+                byte[] bytes = responseJson.getBytes(StandardCharsets.UTF_8);
+                Headers headers = ex.getResponseHeaders();
+                headers.set("Content-Type", "application/json; charset=utf-8");
+                headers.set("Cache-Control", "no-store");
+                ex.sendResponseHeaders(200, bytes.length);
+                try (OutputStream out = ex.getResponseBody()) {
+                    out.write(bytes);
+                }
+            } catch (Exception e) {
+                sendError(ex, e);
             }
         });
         server.createContext("/api/overview", ex -> handleGetJson(ex, q -> {
@@ -132,8 +224,10 @@ public final class VegStudioServer implements AutoCloseable {
                                 .map(Actor::user).orElse(null);
                         Reason reason = JsonCodec.asOptionalString(body, "reason").filter(s -> !s.isBlank())
                                 .map(Reason::of).orElse(null);
-                        return GraphTabularService.applyOrMergePatch(
+                        Map<String, Object> patchRes = GraphTabularService.applyOrMergePatch(
                                 db, JsonCodec.requireString(body, "patchText"), branch, mode, actor, reason);
+                        notifyActivity("Patch (" + mode + ") angewendet (HEAD: " + db.headCommitId() + ")");
+                        return patchRes;
                     }
                 });
             }
@@ -159,7 +253,14 @@ public final class VegStudioServer implements AutoCloseable {
                         attrs.put(e.getKey(), String.valueOf(e.getValue()));
                     }
                 }
-                return GraphTabularService.createObject(db, branch, actor, reason, typeName, attrs);
+                IdGenerationStrategy strategy = JsonCodec.asOptionalString(body, "idStrategy")
+                        .filter(s -> !s.isBlank())
+                        .map(s -> IdGenerationStrategy.valueOf(s.trim().toUpperCase(Locale.ROOT).replace('-', '_')))
+                        .orElse(null);
+                Map<String, Object> created = GraphTabularService.createObject(
+                        db, branch, actor, reason, typeName, attrs, strategy);
+                notifyActivity("Objekt " + typeName + " erstellt (" + actor.id() + ", Commit: " + created.get("commitId") + ")");
+                return created;
             }
         }));
         server.createContext("/api/cell", ex -> handlePostJson(ex, body -> {
@@ -171,7 +272,10 @@ public final class VegStudioServer implements AutoCloseable {
                 String predicate = JsonCodec.requireString(body, "predicate");
                 boolean clear = JsonCodec.asBoolean(body, "clear", false);
                 String value = JsonCodec.asOptionalString(body, "value").orElse(null);
-                return GraphTabularService.setAttributeCell(db, branch, actor, reason, entityId, predicate, value, clear);
+                Map<String, Object> res = GraphTabularService.setAttributeCell(
+                        db, branch, actor, reason, entityId, predicate, value, clear);
+                notifyActivity("Attribut " + predicate + " an " + entityId + " geändert (" + actor.id() + ")");
+                return res;
             }
         }));
         server.createContext("/api/connect", ex -> handlePostJson(ex, body -> {
@@ -182,7 +286,10 @@ public final class VegStudioServer implements AutoCloseable {
                 EntityId sourceId = GraphTabularService.parseEntityId(JsonCodec.requireString(body, "sourceId"));
                 String predicate = JsonCodec.requireString(body, "predicate");
                 EntityId targetId = GraphTabularService.parseEntityId(JsonCodec.requireString(body, "targetId"));
-                return GraphTabularService.connectEntities(db, branch, actor, reason, sourceId, predicate, targetId);
+                Map<String, Object> res = GraphTabularService.connectEntities(
+                        db, branch, actor, reason, sourceId, predicate, targetId);
+                notifyActivity("Relation " + predicate + " verknüpft (" + actor.id() + ")");
+                return res;
             }
         }));
         server.createContext("/api/disconnect", ex -> handlePostJson(ex, body -> {
@@ -191,44 +298,51 @@ public final class VegStudioServer implements AutoCloseable {
                 Actor actor = actorFromBody(body);
                 Reason reason = reasonFromBody(body, "Studio: Disconnect edge");
                 EntityId edgeId = GraphTabularService.parseEntityId(JsonCodec.requireString(body, "edgeId"));
-                return GraphTabularService.disconnectEdge(db, branch, actor, reason, edgeId);
+                Map<String, Object> res = GraphTabularService.disconnectEdge(db, branch, actor, reason, edgeId);
+                notifyActivity("Relation " + edgeId + " getrennt (" + actor.id() + ")");
+                return res;
             }
         }));
         server.createContext("/api/schema/object-type", ex -> handlePostJson(ex, body -> {
             synchronized (mutationLock) {
                 String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
-                return GraphTabularService.defineObjectType(
-                        db, branch, actorFromBody(body), reasonFromBody(body, "Studio: Define ObjectType"),
-                        JsonCodec.requireString(body, "name")
-                );
+                String name = JsonCodec.requireString(body, "name");
+                Map<String, Object> res = GraphTabularService.defineObjectType(
+                        db, branch, actorFromBody(body), reasonFromBody(body, "Studio: Define ObjectType"), name);
+                notifyActivity("ObjectType " + name + " definiert");
+                return res;
             }
         }));
         server.createContext("/api/schema/value-type", ex -> handlePostJson(ex, body -> {
             synchronized (mutationLock) {
                 String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
+                String name = JsonCodec.requireString(body, "name");
                 ValueType vt = ValueType.valueOf(JsonCodec.requireString(body, "scalarType").toUpperCase(Locale.ROOT));
                 boolean unique = JsonCodec.asBoolean(body, "uniqueValues", false);
-                return GraphTabularService.defineValueType(
+                Map<String, Object> res = GraphTabularService.defineValueType(
                         db, branch, actorFromBody(body), reasonFromBody(body, "Studio: Define ValueType"),
-                        JsonCodec.requireString(body, "name"), vt, unique
-                );
+                        name, vt, unique);
+                notifyActivity("ValueType " + name + " definiert");
+                return res;
             }
         }));
         server.createContext("/api/schema/predicate", ex -> handlePostJson(ex, body -> {
             synchronized (mutationLock) {
                 String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
+                String name = JsonCodec.requireString(body, "name");
                 OptionalInt maxOut = JsonCodec.asOptionalLong(body, "maxOutgoing")
                         .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
                 OptionalInt maxIn = JsonCodec.asOptionalLong(body, "maxIncoming")
                         .map(l -> OptionalInt.of(l.intValue())).orElse(OptionalInt.empty());
                 boolean uniqueTriple = JsonCodec.asBoolean(body, "uniqueTriple", true);
-                return GraphTabularService.definePredicate(
+                Map<String, Object> res = GraphTabularService.definePredicate(
                         db, branch, actorFromBody(body), reasonFromBody(body, "Studio: Define Predicate"),
-                        JsonCodec.requireString(body, "name"),
+                        name,
                         JsonCodec.requireString(body, "domain"),
                         JsonCodec.requireString(body, "range"),
-                        maxOut, maxIn, uniqueTriple
-                );
+                        maxOut, maxIn, uniqueTriple);
+                notifyActivity("Predicate " + name + " definiert");
+                return res;
             }
         }));
         server.createContext("/api/checkout", ex -> handlePostJson(ex, body -> {
@@ -236,6 +350,7 @@ public final class VegStudioServer implements AutoCloseable {
                 String branch = JsonCodec.requireString(body, "branch");
                 db.checkoutBranch(branch);
                 SnapshotContext ctx = GraphTabularService.resolveContext(db, branch, null, null);
+                notifyActivity("Branch gewechselt auf " + branch);
                 return GraphTabularService.overview(db, ctx);
             }
         }));
