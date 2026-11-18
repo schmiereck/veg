@@ -491,6 +491,116 @@ class ProjectKnowledgeAndStudioTest {
             assertThat(logoResp.body().length).isGreaterThan(100);
             assertThat(logoResp.body()[0]).isEqualTo((byte) 0x89);
             assertThat(logoResp.body()[1]).isEqualTo((byte) 'P');
+
+            // Graphical Diagram Editor API: starts empty before diagram schema is touched
+            HttpResponse<String> diagEmptyResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(diagEmptyResp.statusCode()).isEqualTo(200);
+            assertThat(JsonCodec.asArray(JsonCodec.parseObject(diagEmptyResp.body()).get("views"))).isEmpty();
+
+            // Save a custom diagram view with explicit tables, custom edge handle, and infobox targets
+            String saveDiagramPayload = JsonCodec.toJson(Map.of(
+                    "viewId", "arch-view",
+                    "title", "Architektur-Sicht",
+                    "description", "Nur ADRs und Invarianten",
+                    "viewMode", "QUERY_TEMPLATE",
+                    "defaultDsl", "MATCH (a:ArchitectureDecision)\nJOIN (a)-[addressesInvariant]->(b:Invariant)\nLIMIT 20",
+                    "tables", List.of(
+                            Map.of("typeName", "ArchitectureDecision", "x", 50, "y", 60, "width", 235),
+                            Map.of("typeName", "Invariant", "x", 390, "y", 80, "width", 240)
+                    ),
+                    "edges", List.of(
+                            Map.of(
+                                    "edgeKey", "ArchitectureDecision|addressesInvariant|Invariant",
+                                    "sourceType", "ArchitectureDecision",
+                                    "predicate", "addressesInvariant",
+                                    "targetType", "Invariant",
+                                    "ctrlX", 275,
+                                    "ctrlY", 170
+                            )
+                    ),
+                    "notes", List.of(
+                            Map.of(
+                                    "noteId", "note-adr",
+                                    "title", "Design-Notiz",
+                                    "text", "Zeigt nur ausgewählte Kerntabellen.",
+                                    "color", "warn",
+                                    "x", 120,
+                                    "y", 310,
+                                    "targets", List.of(
+                                            Map.of("kind", "TABLE", "ref", "Invariant"),
+                                            Map.of("kind", "EDGE", "ref", "ArchitectureDecision|addressesInvariant|Invariant")
+                                    )
+                            )
+                    )
+            ));
+            HttpResponse<String> diagSaveResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams"))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(saveDiagramPayload, StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(diagSaveResp.statusCode()).isEqualTo(200);
+            String diagSavedCommit = String.valueOf(JsonCodec.parseObject(diagSaveResp.body()).get("commitId"));
+
+            // Reload diagrams via GET /api/diagrams and verify coordinates + infobox arrow targets
+            HttpResponse<String> diagListResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(diagListResp.statusCode()).isEqualTo(200);
+            List<Object> views = JsonCodec.asArray(JsonCodec.parseObject(diagListResp.body()).get("views"));
+            assertThat(views).hasSize(1);
+            Map<String, Object> loadedView = JsonCodec.asObject(views.getFirst());
+            assertThat(loadedView.get("title")).isEqualTo("Architektur-Sicht");
+            assertThat(loadedView.get("viewMode")).isEqualTo("QUERY_TEMPLATE");
+            assertThat(JsonCodec.asArray(loadedView.get("tables"))).hasSize(2);
+            assertThat(JsonCodec.asArray(loadedView.get("edges"))).hasSize(1);
+            Map<String, Object> loadedNote = JsonCodec.asObject(JsonCodec.asArray(loadedView.get("notes")).getFirst());
+            assertThat(loadedNote.get("title")).isEqualTo("Design-Notiz");
+            assertThat(JsonCodec.asArray(loadedNote.get("targets"))).hasSize(2);
+
+            // Verify actual typed VEG graph edges (`annotatesTable` and `annotatesEdgeLayout`) exist in DB
+            assertThat(db.currentSnapshot().findTypeByName("StudioDiagramView")).isPresent();
+            var annTablePred = db.currentSnapshot().findPredicateByName("annotatesTable").orElseThrow();
+            var annEdgePred = db.currentSnapshot().findPredicateByName("annotatesEdgeLayout").orElseThrow();
+            assertThat(db.currentSnapshot().allEdges().stream().filter(e -> e.predicateId().equals(annTablePred))).hasSize(1);
+            assertThat(db.currentSnapshot().allEdges().stream().filter(e -> e.predicateId().equals(annEdgePred))).hasSize(1);
+
+            // Historical time-travel before diagram creation returns 0 views
+            HttpResponse<String> diagPastResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams?asOf=c5")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(diagPastResp.statusCode()).isEqualTo(200);
+            assertThat(JsonCodec.asArray(JsonCodec.parseObject(diagPastResp.body()).get("views"))).isEmpty();
+
+            // Delete diagram view at HEAD; time-travel at `diagSavedCommit` still preserves it
+            HttpResponse<String> diagDelResp = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams/delete"))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(JsonCodec.toJson(Map.of(
+                                    "viewId", "arch-view"
+                            )), StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(diagDelResp.statusCode()).isEqualTo(200);
+
+            HttpResponse<String> diagAfterDel = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(JsonCodec.asArray(JsonCodec.parseObject(diagAfterDel.body()).get("views"))).isEmpty();
+
+            HttpResponse<String> diagAtSaved = client.send(
+                    HttpRequest.newBuilder(base.resolve("/api/diagrams?asOf=" + diagSavedCommit)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertThat(JsonCodec.asArray(JsonCodec.parseObject(diagAtSaved.body()).get("views"))).hasSize(1);
         }
     }
 

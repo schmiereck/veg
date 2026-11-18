@@ -4,6 +4,7 @@ import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.veg.cli.json.JsonCodec;
+import io.veg.cli.kb.DiagramModelService;
 import io.veg.cli.kb.GraphTabularService;
 import io.veg.cli.kb.GraphTabularService.SnapshotContext;
 import io.veg.cli.mcp.VegMcpStdioServer;
@@ -354,6 +355,42 @@ public final class VegStudioServer implements AutoCloseable {
                 return GraphTabularService.overview(db, ctx);
             }
         }));
+        server.createContext("/api/diagrams/delete", ex -> handlePostJson(ex, body -> {
+            synchronized (mutationLock) {
+                String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
+                String viewId = JsonCodec.requireString(body, "viewId");
+                Map<String, Object> res = DiagramModelService.deleteView(
+                        db,
+                        branch,
+                        actorFromBody(body),
+                        reasonFromBody(body, "Studio: Delete diagram view " + viewId),
+                        viewId
+                );
+                notifyActivity("Diagramm-Ansicht '" + viewId + "' gelöscht (Commit: " + res.get("commitId") + ")");
+                return res;
+            }
+        }));
+        server.createContext("/api/diagrams", ex -> {
+            if ("GET".equalsIgnoreCase(ex.getRequestMethod())) {
+                handleGetJson(ex, q -> DiagramModelService.listViews(db, ctxFromQuery(q)));
+            } else {
+                handlePostJson(ex, body -> {
+                    synchronized (mutationLock) {
+                        String branch = JsonCodec.asOptionalString(body, "branch").orElse(db.currentBranch());
+                        Map<String, Object> res = DiagramModelService.saveView(
+                                db,
+                                branch,
+                                actorFromBody(body),
+                                reasonFromBody(body, "Studio: Save diagram view"),
+                                body
+                        );
+                        notifyActivity("Diagramm-Ansicht '" + res.get("viewId")
+                                + "' gespeichert (Commit: " + res.get("commitId") + ")");
+                        return res;
+                    }
+                });
+            }
+        });
     }
 
     @FunctionalInterface

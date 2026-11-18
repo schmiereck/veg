@@ -21,6 +21,7 @@
       <nav class="view-tabs" role="tablist">
         <button class="tab-btn active" data-view="datasheet">Datenblatt</button>
         <button class="tab-btn" data-view="schema">Beziehungen &amp; Schema</button>
+        <button class="tab-btn" data-view="diagram">Grafischer Editor</button>
         <button class="tab-btn" data-view="query">Abfrage-Assistent</button>
         <button class="tab-btn" data-view="history">Historie &amp; Diff</button>
       </nav>
@@ -157,6 +158,53 @@
                 <button class="btn btn-primary" type="submit">Prädikat anlegen</button>
               </form>
             </div>
+          </div>
+        </section>
+
+        <!-- VIEW 2b: Graphical Diagram Editor -->
+        <section class="view-panel" id="view-diagram">
+          <div class="diagram-toolbar">
+            <div class="diagram-toolbar-group">
+              <label class="diagram-inline-label">
+                <span>Ansicht</span>
+                <select id="diagramViewSelect"></select>
+              </label>
+              <button class="btn btn-secondary" type="button" id="newDiagramViewBtn">+ Neue Ansicht</button>
+              <button class="btn btn-secondary" type="button" id="seedDiagramViewBtn" title="Legt eine beispielhafte Sicht aus dem Schema an">Beispiel füllen</button>
+              <button class="btn btn-danger btn-sm" type="button" id="deleteDiagramViewBtn">Ansicht löschen</button>
+            </div>
+
+            <div class="diagram-toolbar-group">
+              <select id="diagramAddTableSelect" title="Objekttyp auswählen"></select>
+              <button class="btn btn-secondary" type="button" id="addTableToDiagramBtn">+ Tabelle hinzufügen</button>
+              <button class="btn btn-secondary" type="button" id="addDiagramNoteBtn">+ Infobox</button>
+            </div>
+
+            <div class="diagram-toolbar-group">
+              <button class="btn btn-secondary" type="button" id="diagramToQueryBtn" title="Aus den sichtbaren Tabellen und Verbindungen eine GraphQueryDsl-Abfrage erzeugen">Abfrage (DSL) ableiten</button>
+              <span class="pill hidden" id="diagramDirtyBadge">Ungespeichert</span>
+              <button class="btn btn-primary" type="button" id="saveDiagramBtn">In DB speichern</button>
+            </div>
+          </div>
+
+          <div class="diagram-linking-banner hidden" id="diagramLinkingBanner">
+            <span id="diagramLinkingText">Pfeil-Modus aktiv: Klicken Sie auf eine Tabelle oder einen Verknüpfungspunkt (Handle), um einen Pfeil hinzuzufügen oder zu entfernen.</span>
+            <button class="btn btn-sm btn-secondary" type="button" id="cancelLinkingModeBtn">Fertig</button>
+          </div>
+
+          <div class="diagram-workspace">
+            <div class="diagram-canvas-wrap" id="diagramCanvasWrap">
+              <div class="diagram-stage" id="diagramStage">
+                <svg class="diagram-svg-layer" id="diagramSvgLayer" width="1800" height="1100" viewBox="0 0 1800 1100"></svg>
+                <div class="diagram-nodes-layer" id="diagramNodesLayer"></div>
+                <div class="diagram-empty-hint hidden" id="diagramEmptyHint">
+                  <strong>Leere Diagramm-Ansicht</strong>
+                  <span>Fügen Sie oben über „+ Tabelle hinzufügen“ nur die gewünschten Tabellen oder über „+ Infobox“ erklärende Notizen mit Pfeilen hinzu.</span>
+                </div>
+              </div>
+            </div>
+
+            <aside class="diagram-inspector card" id="diagramInspector"></aside>
           </div>
         </section>
 
